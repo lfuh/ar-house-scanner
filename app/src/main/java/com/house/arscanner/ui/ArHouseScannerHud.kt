@@ -119,7 +119,7 @@ fun TopTelemetryHudBar(
                 Spacer(modifier = Modifier.width(6.dp))
                 Column {
                     Text(
-                        text = if (hasRealGps) "LIVE GPS + COMPASS" else "PRESET / INDOOR",
+                        text = if (hasRealGps) "LIVE GPS" else "PRESET / INDOOR",
                         color = if (hasRealGps) EmeraldAccent else GoldAccent,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.ExtraBold,
@@ -128,12 +128,12 @@ fun TopTelemetryHudBar(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = String.format("%.5f, %.5f", lat, lon),
+                        text = String.format("%.4f, %.4f", lat, lon),
                         color = TextWhite,
                         fontSize = 10.5.sp,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        softWrap = false
                     )
                 }
             }
@@ -227,108 +227,27 @@ fun ArHouseTargetOverlay(
         label = "stability_ring"
     )
 
-    Box(
+    val showFloatingPin = isLocked && property != null && !isLoadingLookup
+
+    Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(top = 64.dp, bottom = 275.dp),
-        contentAlignment = Alignment.Center
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        // 1. Viewfinder Reticle & Stabilization Ring (centered in visible camera viewport)
-        Box(
-            modifier = Modifier.size(164.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val strokeW = 3.dp.toPx()
-                val ringColor = when {
-                    isLocked -> EmeraldAccent
-                    isSteady -> CyanAccent
-                    else -> GoldAccent
-                }
-
-                // Corner framing brackets
-                val bracketLen = 24.dp.toPx()
-                val pad = 8.dp.toPx()
-                val w = size.width
-                val h = size.height
-
-                // Top-left bracket
-                drawLine(ringColor, Offset(pad, pad), Offset(pad + bracketLen, pad), strokeW)
-                drawLine(ringColor, Offset(pad, pad), Offset(pad, pad + bracketLen), strokeW)
-                // Top-right bracket
-                drawLine(ringColor, Offset(w - pad, pad), Offset(w - pad - bracketLen, pad), strokeW)
-                drawLine(ringColor, Offset(w - pad, pad), Offset(w - pad, pad + bracketLen), strokeW)
-                // Bottom-left bracket
-                drawLine(ringColor, Offset(pad, h - pad), Offset(pad + bracketLen, h - pad), strokeW)
-                drawLine(ringColor, Offset(pad, h - pad), Offset(pad, h - pad - bracketLen), strokeW)
-                // Bottom-right bracket
-                drawLine(ringColor, Offset(w - pad, h - pad), Offset(w - pad - bracketLen, h - pad), strokeW)
-                drawLine(ringColor, Offset(w - pad, h - pad), Offset(w - pad, h - pad - bracketLen), strokeW)
-
-                // Inner circular stabilization progress arc
-                val arcRadius = (size.minDimension / 2f) - 22.dp.toPx()
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.15f),
-                    radius = arcRadius,
-                    style = Stroke(width = 4.dp.toPx())
-                )
-                drawArc(
-                    color = ringColor,
-                    startAngle = -90f,
-                    sweepAngle = 360f * animatedProgress,
-                    useCenter = false,
-                    topLeft = Offset(center.x - arcRadius, center.y - arcRadius),
-                    size = Size(arcRadius * 2, arcRadius * 2),
-                    style = Stroke(width = 4.5.dp.toPx(), cap = StrokeCap.Round)
-                )
-
-                // Center target dot
-                drawCircle(
-                    color = ringColor,
-                    radius = if (isLocked) 5.dp.toPx() else 3.5.dp.toPx(),
-                    center = center
-                )
-            }
-
-            // Stabilization status prompt when not yet locked
-            if (!isLocked || isLoadingLookup) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 12.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(DarkGlass)
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                ) {
-                    val statusText = when {
-                        isLoadingLookup -> "Fetching live Zillow Zestimate..."
-                        !isSteady -> "Point at house & hold steady..."
-                        else -> "Stabilizing ${(animatedProgress * 100).roundToInt()}%..."
-                    }
-                    Text(
-                        text = statusText,
-                        color = if (isSteady) CyanAccent else GoldAccent,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
-                    )
-                }
-            }
-        }
-
-        // 2. Compact Floating AR House Price Pin (Anchored cleanly inside the camera viewport, never overlaps bottom sheet!)
+        // 1. Compact Floating AR House Price Pin (Stacked directly above the reticle, never overlaps top bar or bottom sheet!)
         AnimatedVisibility(
-            visible = isLocked && property != null && !isLoadingLookup,
+            visible = showFloatingPin,
             enter = fadeIn() + scaleIn(initialScale = 0.88f),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 8.dp, start = 16.dp, end = 16.dp)
+            exit = fadeOut()
         ) {
             property?.let { prop ->
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { onOpenDetailsSheet() }
+                    modifier = Modifier
+                        .padding(bottom = 6.dp)
+                        .clickable { onOpenDetailsSheet() }
                 ) {
                     Surface(
                         color = CardGlass,
@@ -408,6 +327,89 @@ fun ArHouseTargetOverlay(
                         }
                         drawPath(path, color = EmeraldAccent)
                     }
+                }
+            }
+        }
+
+        // 2. Viewfinder Reticle & Stabilization Ring (centered in visible camera viewport)
+        Box(
+            modifier = Modifier.size(if (showFloatingPin) 136.dp else 164.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val strokeW = 3.dp.toPx()
+                val ringColor = when {
+                    isLocked -> EmeraldAccent
+                    isSteady -> CyanAccent
+                    else -> GoldAccent
+                }
+
+                // Corner framing brackets
+                val bracketLen = 22.dp.toPx()
+                val pad = 6.dp.toPx()
+                val w = size.width
+                val h = size.height
+
+                // Top-left bracket
+                drawLine(ringColor, Offset(pad, pad), Offset(pad + bracketLen, pad), strokeW)
+                drawLine(ringColor, Offset(pad, pad), Offset(pad, pad + bracketLen), strokeW)
+                // Top-right bracket
+                drawLine(ringColor, Offset(w - pad, pad), Offset(w - pad - bracketLen, pad), strokeW)
+                drawLine(ringColor, Offset(w - pad, pad), Offset(w - pad, pad + bracketLen), strokeW)
+                // Bottom-left bracket
+                drawLine(ringColor, Offset(pad, h - pad), Offset(pad + bracketLen, h - pad), strokeW)
+                drawLine(ringColor, Offset(pad, h - pad), Offset(pad, h - pad - bracketLen), strokeW)
+                // Bottom-right bracket
+                drawLine(ringColor, Offset(w - pad, h - pad), Offset(w - pad - bracketLen, h - pad), strokeW)
+                drawLine(ringColor, Offset(w - pad, h - pad), Offset(w - pad, h - pad - bracketLen), strokeW)
+
+                // Inner circular stabilization progress arc
+                val arcRadius = (size.minDimension / 2f) - 20.dp.toPx()
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.15f),
+                    radius = arcRadius,
+                    style = Stroke(width = 4.dp.toPx())
+                )
+                drawArc(
+                    color = ringColor,
+                    startAngle = -90f,
+                    sweepAngle = 360f * animatedProgress,
+                    useCenter = false,
+                    topLeft = Offset(center.x - arcRadius, center.y - arcRadius),
+                    size = Size(arcRadius * 2, arcRadius * 2),
+                    style = Stroke(width = 4.5.dp.toPx(), cap = StrokeCap.Round)
+                )
+
+                // Center target dot
+                drawCircle(
+                    color = ringColor,
+                    radius = if (isLocked) 5.dp.toPx() else 3.5.dp.toPx(),
+                    center = center
+                )
+            }
+
+            // Stabilization status prompt when not yet locked
+            if (!isLocked || isLoadingLookup) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 12.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(DarkGlass)
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    val statusText = when {
+                        isLoadingLookup -> "Fetching live Zillow Zestimate..."
+                        !isSteady -> "Point at house & hold steady..."
+                        else -> "Stabilizing ${(animatedProgress * 100).roundToInt()}%..."
+                    }
+                    Text(
+                        text = statusText,
+                        color = if (isSteady) CyanAccent else GoldAccent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
                 }
             }
         }

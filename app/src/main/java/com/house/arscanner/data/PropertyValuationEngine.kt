@@ -142,7 +142,7 @@ object PropertyValuationEngine {
                         )
                     }
                     else -> {
-                        cameraDetectionNote = "🧭 Compass + GPS Projection (${distanceMeters}m)"
+                        cameraDetectionNote = "🧭 GPS + Compass (${distanceMeters}m)"
                         baseGeo
                     }
                 }

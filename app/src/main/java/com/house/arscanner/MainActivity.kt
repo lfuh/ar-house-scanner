@@ -153,106 +153,110 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.fillMaxSize()
                         )
 
-                        // 2. Center AR Stabilization Reticle + Floating House Price Pin
-                        ArHouseTargetOverlay(
-                            stabilityProgress = stabilityProgress,
-                            isSteady = isSteady,
-                            isLocked = isLocked,
-                            isLoadingLookup = isLoadingLookup,
-                            property = currentValuation,
-                            onOpenDetailsSheet = {
-                                isDetailsExpanded = !isDetailsExpanded
-                            },
+                        // 2. Non-overlapping vertical HUD layout: Top Bar -> Center AR Viewport -> Bottom Sheet
+                        Column(
                             modifier = Modifier.fillMaxSize()
-                        )
-
-                        // 3. Top GPS, Compass Heading & Preset Switcher HUD
-                        TopTelemetryHudBar(
-                            lat = currentLat,
-                            lon = currentLon,
-                            hasRealGps = hasRealGps,
-                            headingDeg = currentHeadingDeg,
-                            targetDistanceMeters = targetDistanceMeters,
-                            isLocked = isLocked,
-                            isSteady = isSteady,
-                            stabilityProgress = stabilityProgress,
-                            onCycleDistance = {
-                                targetDistanceMeters = when (targetDistanceMeters) {
-                                    15 -> 24
-                                    24 -> 40
-                                    else -> 15
+                        ) {
+                            // Top GPS, Compass Heading & Scan Now HUD
+                            TopTelemetryHudBar(
+                                lat = currentLat,
+                                lon = currentLon,
+                                hasRealGps = hasRealGps,
+                                headingDeg = currentHeadingDeg,
+                                targetDistanceMeters = targetDistanceMeters,
+                                isLocked = isLocked,
+                                isSteady = isSteady,
+                                stabilityProgress = stabilityProgress,
+                                onCycleDistance = {
+                                    targetDistanceMeters = when (targetDistanceMeters) {
+                                        15 -> 24
+                                        24 -> 40
+                                        else -> 15
+                                    }
+                                    pendingPresetLabel = null
+                                    tracker.triggerRealGpsScan(immediate = true)
+                                },
+                                onRescanClick = {
+                                    isDetailsExpanded = false
+                                    currentValuation = null
+                                    pendingPresetLabel = null
+                                    tracker.triggerRealGpsScan(immediate = true)
                                 }
-                                pendingPresetLabel = null
-                                tracker.triggerRealGpsScan(immediate = true)
-                            },
-                            onRescanClick = {
-                                isDetailsExpanded = false
-                                currentValuation = null
-                                pendingPresetLabel = null
-                                tracker.triggerRealGpsScan(immediate = true)
-                            },
-                            modifier = Modifier.align(Alignment.TopCenter)
-                        )
+                            )
 
-                        // 4. Permission Banner if Camera or GPS permission was skipped
-                        if (!hasCameraPermission || !hasLocationPermission) {
-                            Surface(
-                                color = Color(0xE61E1424),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 96.dp, start = 16.dp, end = 16.dp)
-                                    .fillMaxWidth()
-                                    .border(1.dp, Color(0xFFFFCA28), RoundedCornerShape(12.dp))
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    Text(
-                                        text = "Camera & Location Permissions Recommended",
-                                        color = Color(0xFFFFCA28),
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "Grant Camera and Fine Location permissions so the AR viewfinder can see the house and use your live GPS + Compass.",
-                                        color = Color.White,
-                                        fontSize = 11.sp
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Button(
-                                        onClick = {
-                                            permissionLauncher.launch(
-                                                arrayOf(
-                                                    Manifest.permission.CAMERA,
-                                                    Manifest.permission.ACCESS_FINE_LOCATION,
-                                                    Manifest.permission.ACCESS_COARSE_LOCATION
-                                                )
-                                            )
-                                        },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFFFFCA28),
-                                            contentColor = Color.Black
+                            // Permission Banner if Camera or GPS permission was skipped
+                            if (!hasCameraPermission || !hasLocationPermission) {
+                                Surface(
+                                    color = Color(0xE61E1424),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                                        .fillMaxWidth()
+                                        .border(1.dp, Color(0xFFFFCA28), RoundedCornerShape(12.dp))
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = "Camera & Location Permissions Recommended",
+                                            color = Color(0xFFFFCA28),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
                                         )
-                                    ) {
-                                        Text("Grant Camera & GPS", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = "Grant Camera and Fine Location permissions so the AR viewfinder can see the house and use your live GPS + Compass.",
+                                            color = Color.White,
+                                            fontSize = 11.sp
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Button(
+                                            onClick = {
+                                                permissionLauncher.launch(
+                                                    arrayOf(
+                                                        Manifest.permission.CAMERA,
+                                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                                    )
+                                                )
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFFFFCA28),
+                                                contentColor = Color.Black
+                                            )
+                                        ) {
+                                            Text("Grant Camera & GPS", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        // 5. Bottom Property Valuation & School/Rent/History Sheet
-                        BottomPropertyInsightSheet(
-                            property = currentValuation,
-                            isExpanded = isDetailsExpanded,
-                            onToggleExpand = { isDetailsExpanded = !isDetailsExpanded },
-                            onLockNewHouse = {
-                                isDetailsExpanded = false
-                                currentValuation = null
-                                pendingPresetLabel = null
-                                tracker.triggerRealGpsScan(immediate = false)
-                            },
-                            modifier = Modifier.align(Alignment.BottomCenter)
-                        )
+                            // Center AR Stabilization Reticle + Floating House Price Pin
+                            ArHouseTargetOverlay(
+                                stabilityProgress = stabilityProgress,
+                                isSteady = isSteady,
+                                isLocked = isLocked,
+                                isLoadingLookup = isLoadingLookup,
+                                property = currentValuation,
+                                onOpenDetailsSheet = {
+                                    isDetailsExpanded = !isDetailsExpanded
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                            )
+
+                            // Bottom Property Valuation & School/Rent/History Sheet
+                            BottomPropertyInsightSheet(
+                                property = currentValuation,
+                                isExpanded = isDetailsExpanded,
+                                onToggleExpand = { isDetailsExpanded = !isDetailsExpanded },
+                                onLockNewHouse = {
+                                    isDetailsExpanded = false
+                                    currentValuation = null
+                                    pendingPresetLabel = null
+                                    tracker.triggerRealGpsScan(immediate = false)
+                                }
+                            )
+                        }
                     }
                 }
             }
