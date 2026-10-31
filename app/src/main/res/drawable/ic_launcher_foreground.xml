@@ -1,30 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:pathData="M31,63.928c0,0 6.4,-11 12.1,-13.1c7.2,-2.6 26,-1.4 26,-1.4l38.1,38.1L107,108.928l-32,-1L31,63.928z">
+
+    <!-- Soft drop shadow behind house & viewfinder -->
+    <path
+        android:fillColor="#55000000"
+        android:pathData="M54,33L33,50L37,50L37,75L71,75L71,50L75,50Z" />
+
+    <!-- AR Viewfinder Corner Brackets (Cyan #00E5FF) -->
+    <!-- Top-Left Bracket -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M27,37 L27,29 C27,27.9 27.9,27 29,27 L37,27"
+        android:strokeWidth="2.8"
+        android:strokeColor="#00E5FF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Top-Right Bracket -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M71,27 L79,27 C80.1,27 81,27.9 81,29 L81,37"
+        android:strokeWidth="2.8"
+        android:strokeColor="#00E5FF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Bottom-Left Bracket -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M27,71 L27,79 C27,80.1 27.9,81 29,81 L37,81"
+        android:strokeWidth="2.8"
+        android:strokeColor="#00E5FF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Bottom-Right Bracket -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M71,81 L79,81 C80.1,81 81,80.1 81,79 L81,71"
+        android:strokeWidth="2.8"
+        android:strokeColor="#00E5FF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- House Main Body (Crisp architectural white-blue gradient) -->
+    <path android:pathData="M38,49 L54,36 L70,49 L70,74 C70,75.1 69.1,76 68,76 L40,76 C38.9,76 38,75.1 38,74 Z">
         <aapt:attr name="android:fillColor">
             <gradient
-                android:endX="85.84757"
-                android:endY="92.4963"
-                android:startX="42.9492"
-                android:startY="49.59793"
+                android:endX="54"
+                android:endY="76"
+                android:startX="54"
+                android:startY="36"
                 android:type="linear">
                 <item
-                    android:color="#44000000"
+                    android:color="#F4FAFF"
                     android:offset="0.0" />
                 <item
-                    android:color="#00000000"
+                    android:color="#C7E4FA"
                     android:offset="1.0" />
             </gradient>
         </aapt:attr>
     </path>
+
+    <!-- House Roof Overhang & Chimney (Cyan-tinted accent) -->
     <path
-        android:fillColor="#FFFFFF"
-        android:fillType="nonZero"
-        android:pathData="M65.3,45.828l3.8,-6.6c0.2,-0.4 0.1,-0.9 -0.3,-1.1c-0.4,-0.2 -0.9,-0.1 -1.1,0.3l-3.9,6.7c-6.3,-2.8 -13.4,-2.8 -19.7,0l-3.9,-6.7c-0.2,-0.4 -0.7,-0.5 -1.1,-0.3C38.8,38.328 38.7,38.828 38.9,39.228l3.8,6.6C36.2,49.428 31.7,56.028 31,63.928h46C76.3,56.028 71.8,49.428 65.3,45.828zM43.4,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2c-0.3,-0.7 -0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C45.3,56.528 44.5,57.328 43.4,57.328L43.4,57.328zM64.6,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2s-0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C66.5,56.528 65.6,57.328 64.6,57.328L64.6,57.328z"
-        android:strokeWidth="1"
-        android:strokeColor="#00000000" />
+        android:fillColor="#00E5FF"
+        android:pathData="M62,34 L67,34 L67,42 L62,38 Z" />
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M54,30 L31,49 L35,52.5 L54,36.8 L73,52.5 L77,49 Z" />
+
+    <!-- House Door & Window Details (Deep Navy #08182B) -->
+    <path
+        android:fillColor="#0A1E36"
+        android:pathData="M50,61 L58,61 C58.6,61 59,61.4 59,62 L59,76 L49,76 L49,62 C49,61.4 49.4,61 50,61 Z" />
+    <!-- Left & Right Windows -->
+    <path
+        android:fillColor="#0A1E36"
+        android:pathData="M42,52h6v6h-6zM60,52h6v6h-6z" />
+
+    <!-- Horizontal Neon Laser Scan Line Across the House -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M24,57 L84,57"
+        android:strokeWidth="1.8"
+        android:strokeColor="#00E676"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#4400E676"
+        android:pathData="M31,57h46v5h-46z" />
+
+    <!-- Floating AR Price Tag Pill Badge (Top-Right over Roof, Emerald Green #00E676) -->
+    <path
+        android:fillColor="#061526"
+        android:pathData="M56,24 L78,24 C80.8,24 83,26.2 83,29 L83,39 C83,41.8 80.8,44 78,44 L56,44 C53.2,44 51,41.8 51,39 L51,29 C51,26.2 53.2,24 56,24 Z"
+        android:strokeWidth="1.8"
+        android:strokeColor="#00E676" />
+
+    <!-- Crisp "$" Dollar Symbol Inside the AR Valuation Badge -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M67,27.2 L67,40.8 M70.2,30.2 C70.2,28.9 68.8,28.2 67,28.2 C65.1,28.2 63.8,29.1 63.8,30.6 C63.8,33.6 70.4,33.2 70.4,36.6 C70.4,38.2 69.0,39.2 67,39.2 C65.0,39.2 63.6,38.3 63.6,36.9"
+        android:strokeWidth="2.1"
+        android:strokeColor="#00E676"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
 </vector>
