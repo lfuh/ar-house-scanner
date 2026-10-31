@@ -186,6 +186,8 @@ class MainActivity : ComponentActivity() {
                                 tracker.triggerManualOrPresetScan(immediate = true)
                             },
                             onRescanClick = {
+                                isDetailsExpanded = false
+                                currentValuation = null
                                 tracker.triggerManualOrPresetScan(immediate = true)
                             },
                             modifier = Modifier.align(Alignment.TopCenter)
@@ -244,6 +246,7 @@ class MainActivity : ComponentActivity() {
                             onToggleExpand = { isDetailsExpanded = !isDetailsExpanded },
                             onLockNewHouse = {
                                 isDetailsExpanded = false
+                                currentValuation = null
                                 tracker.triggerManualOrPresetScan(immediate = false)
                             },
                             modifier = Modifier.align(Alignment.BottomCenter)

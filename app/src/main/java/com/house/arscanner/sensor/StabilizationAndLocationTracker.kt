@@ -61,8 +61,9 @@ class StabilizationAndLocationTracker(
 
     @SuppressLint("MissingPermission")
     fun start(hasLocationPermission: Boolean) {
-        steadyStartTimestampMs = System.currentTimeMillis()
-        isLockedOnTarget = false
+        if (!isLockedOnTarget) {
+            steadyStartTimestampMs = System.currentTimeMillis()
+        }
 
         sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
@@ -191,23 +192,18 @@ class StabilizationAndLocationTracker(
         val isSteady = lastLinearAccelMagnitude < motionThreshold
 
         if (isLockedOnTarget) {
-            // Check if the user panned the camera to look at a different house (>16° heading change or sharp shake)
-            val headingDiff = kotlin.math.abs(((currentHeadingDeg - lockedHeadingDeg + 540f) % 360f) - 180f)
-            if (headingDiff > unlockHeadingDeltaDeg || lastLinearAccelMagnitude > motionThreshold * 2.4f) {
-                isLockedOnTarget = false
-                steadyStartTimestampMs = now
-            } else {
-                onStateUpdate(
-                    currentLat,
-                    currentLon,
-                    hasRealGpsFix,
-                    currentHeadingDeg,
-                    1.0f,
-                    true,
-                    true
-                )
-                return
-            }
+            // Stay locked on the current property until the user explicitly taps "Scan Now"
+            // so the user can lower or move the phone comfortably while reading the report.
+            onStateUpdate(
+                currentLat,
+                currentLon,
+                hasRealGpsFix,
+                currentHeadingDeg,
+                1.0f,
+                true,
+                true
+            )
+            return
         }
 
         if (!isSteady) {
