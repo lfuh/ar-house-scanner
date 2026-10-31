@@ -393,8 +393,13 @@ fun ArHouseTargetOverlay(
                             )
 
                             // Bed / Bath / SqFt & Price/SqFt
+                            val bathText = if (prop.bathrooms % 1.0 == 0.0) {
+                                prop.bathrooms.toInt().toString()
+                            } else {
+                                prop.bathrooms.toString()
+                            }
                             Text(
-                                text = "${prop.bedrooms} bd • ${prop.bathrooms} ba • ${prop.livingAreaSqFt} sqft (${prop.pricePerSqFt})",
+                                text = "${prop.bedrooms} bd • $bathText ba • ${prop.livingAreaSqFt} sqft (${prop.pricePerSqFt})",
                                 color = TextMuted,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Medium
@@ -631,8 +636,13 @@ fun BottomPropertyInsightSheet(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val bathStr = if (prop.bathrooms % 1.0 == 0.0) {
+                            prop.bathrooms.toInt().toString()
+                        } else {
+                            prop.bathrooms.toString()
+                        }
                         Text(
-                            text = "${prop.bedrooms} Beds • ${prop.bathrooms} Baths • ${prop.livingAreaSqFt} SqFt • Lot ${prop.lotSizeSqFt} SqFt",
+                            text = "${prop.bedrooms} Beds • $bathStr Baths • ${prop.livingAreaSqFt} SqFt • Lot ${prop.lotSizeSqFt} SqFt",
                             color = TextWhite,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold

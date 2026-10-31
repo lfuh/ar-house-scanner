@@ -305,10 +305,12 @@ object PropertyValuationEngine {
         val rawMortgage = (loanAmount * (monthlyRate * Math.pow(1 + monthlyRate, nMonths)) /
             (Math.pow(1 + monthlyRate, nMonths) - 1)).roundToInt()
 
-        val rawAnnualTax = ((rawMarketValue * 0.0118) / 100).roundToInt() * 100L
+        val taxBasis = liveData?.taxAssessedValue ?: rawMarketValue
+        val rawAnnualTax = ((taxBasis * 0.0118) / 100).roundToInt() * 100L
         val hoaMonthly = when {
             liveData?.hoaMonthly != null && liveData.hoaMonthly > 0 -> "$${liveData.hoaMonthly}/mo"
             liveData?.hoaMonthly == 0 -> "None"
+            liveData != null -> "None"
             hash % 3 == 0 -> "$${180 + (hash % 240)}/mo"
             else -> "None"
         }
@@ -330,10 +332,10 @@ object PropertyValuationEngine {
         val zillowUrl = liveData?.zillowUrl?.takeIf { it.isNotBlank() }
             ?: "https://www.zillow.com/homes/${zillowSlug}_rb/"
 
-        val sourceLabel = if (liveData?.zestimatePrice != null) {
-            "Zillow Live Zestimate"
-        } else {
-            "Regional Estimate (Fallback)"
+        val sourceLabel = when {
+            liveData?.zestimatePrice != null -> "Zillow Live Zestimate"
+            liveData?.lastSoldPrice != null || liveData?.bedrooms != null -> "Zillow / MLS Public Record"
+            else -> "Regional Estimate (Fallback)"
         }
 
         val appreciationSign = if (appreciationPct >= 0) "+" else ""
@@ -361,7 +363,7 @@ object PropertyValuationEngine {
             livingAreaSqFt = sqFt,
             lotSizeSqFt = lotSqFt,
             yearBuilt = yearBuilt,
-            propertyType = "Single Family Residence",
+            propertyType = liveData?.propertyType ?: "Single Family Residence",
             overallSchoolScore = avgSchool,
             schools = liveData?.schools?.takeIf { it.isNotEmpty() } ?: listOf(
                 SchoolRating(
@@ -408,9 +410,9 @@ object PropertyValuationEngine {
      * Curated presets so you can test real properties indoors or on an emulator.
      */
     val presetLocations = listOf(
+        Triple("3488 Cowper Ct, Palo Alto", 37.4234, -122.1191),
         Triple("3492 Cowper Ct, Palo Alto", 37.4184, -122.1162),
         Triple("20275 Northglen Sq, Cupertino", 37.3263, -122.0282),
-        Triple("334 Santana Row, San Jose", 37.3218, -121.9479),
-        Triple("1455 Market St, San Francisco", 37.7752, -122.4175)
+        Triple("334 Santana Row, San Jose", 37.3218, -121.9479)
     )
 }

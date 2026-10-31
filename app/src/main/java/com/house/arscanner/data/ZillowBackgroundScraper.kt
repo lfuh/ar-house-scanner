@@ -12,8 +12,6 @@ import android.webkit.WebViewClient
 import com.house.arscanner.model.SaleRecord
 import com.house.arscanner.model.SchoolRating
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -24,6 +22,7 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
 import kotlin.coroutines.resume
+import kotlin.math.roundToInt
 
 data class LiveScrapedPropertyData(
     val zillowUrl: String,
@@ -36,22 +35,25 @@ data class LiveScrapedPropertyData(
     val livingAreaSqFt: Int? = null,
     val lotSizeSqFt: Int? = null,
     val yearBuilt: Int? = null,
+    val propertyType: String? = null,
     val lastSoldPrice: Long? = null,
     val lastSoldDate: String? = null,
+    val taxAssessedValue: Long? = null,
     val hoaMonthly: Int? = null,
     val schools: List<SchoolRating> = emptyList(),
     val saleHistory: List<SaleRecord> = emptyList(),
-    val dataSourceLabel: String = "Zillow Live"
+    val dataSourceLabel: String = "Zillow Live Zestimate"
 )
 
 /**
- * Fetches live Zillow property valuation and home details in the background without any API key:
- * 1. Resolves the exact Zillow Property ID (`zpid`) via Zillow's public autocomplete API.
- * 2. Launches a background Android `WebView` on the Zillow property URL and extracts
- *    `#__NEXT_DATA__` (`gdpClientCache`), `[data-testid="zestimate-text"]`, and DOM metrics.
- * 3. If Zillow serves a bot-challenge (`px-captcha`), automatically redirects the background
- *    `WebView` (and runs a parallel snippet fetch) to extract Zillow/Redfin's live indexed
- *    Zestimate, bed/bath/sqft, and sale history for that exact street address.
+ * Fetches live Zillow property valuation and exact home facts without requiring any API key:
+ * 1. Queries Zillow's public autocomplete endpoint (`zillowstatic.com/autocomplete/v3/suggestions`)
+ *    to resolve the exact Zillow Property ID (`zpid`) and canonical address slug.
+ * 2. Fetches the Zillow Group property data payload (`__NEXT_DATA__` via Trulia's Zillow-backed
+ *    `/home/{slug}-{zpid}` endpoint, which serves Zillow's exact Zestimate, beds, baths, sqft,
+ *    year built, tax assessment, and MLS sale history without PerimeterX captcha blocks).
+ * 3. Falls back to DuckDuckGo Lite search snippets + background WebView if a parcel has no
+ *    direct `zpid` match.
  */
 object ZillowBackgroundScraper {
 
@@ -59,13 +61,16 @@ object ZillowBackgroundScraper {
         "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
     data class ZillowTargetUrl(
-        val url: String,
-        val zpid: String?
+        val zillowUrl: String,
+        val truliaUrl: String?,
+        val zpid: String?,
+        val displayAddress: String
     )
 
     /**
      * Uses Zillow's public autocomplete endpoint to find the exact `zpid` for an address
-     * so we can open the direct `/homedetails/.../{zpid}_zpid/` page.
+     * and constructs both the direct Zillow `/homedetails/.../{zpid}_zpid/` URL and the
+     * Zillow-Group `/home/{slug}-{zpid}` data URL.
      */
     fun resolveZillowPropertyUrl(
         streetAddress: String,
@@ -73,18 +78,21 @@ object ZillowBackgroundScraper {
         state: String,
         postalCode: String
     ): ZillowTargetUrl {
-        val slug = "$streetAddress-$city-$state-$postalCode"
+        val rawFull = "$streetAddress $city $state $postalCode"
+        val defaultSlug = "$streetAddress-$city-$state-$postalCode"
             .replace(Regex("[^A-Za-z0-9]+"), "-")
             .trim('-')
-        val fallbackUrl = "https://www.zillow.com/homes/${slug}_rb/"
+        val fallbackZillowUrl = "https://www.zillow.com/homes/${defaultSlug}_rb/"
 
         try {
             val query = URLEncoder.encode("$streetAddress, $city, $state $postalCode", "UTF-8")
-            val apiUrl = URL("https://www.zillowstatic.com/autocomplete/v3/suggestions?q=$query&resultTypes=allAddress&resultCount=3")
+            val apiUrl = URL(
+                "https://www.zillowstatic.com/autocomplete/v3/suggestions?q=$query&resultTypes=allAddress&resultCount=3"
+            )
             val conn = (apiUrl.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 3000
-                readTimeout = 3000
+                connectTimeout = 3500
+                readTimeout = 3500
                 setRequestProperty("User-Agent", MOBILE_CHROME_UA)
                 setRequestProperty("Accept", "application/json")
             }
@@ -95,26 +103,43 @@ object ZillowBackgroundScraper {
                 if (results != null && results.length() > 0) {
                     for (i in 0 until results.length()) {
                         val item = results.optJSONObject(i) ?: continue
+                        val display = item.optString("display").ifBlank { rawFull }
                         val meta = item.optJSONObject("metaData") ?: continue
                         val zpid = meta.opt("zpid")?.toString()?.takeIf { it.isNotBlank() && it != "null" }
                         if (zpid != null) {
+                            val zillowSlug = display
+                                .replace(Regex("[^A-Za-z0-9]+"), "-")
+                                .trim('-')
+                            val truliaSlug = display
+                                .lowercase(Locale.US)
+                                .replace(Regex("[^a-z0-9]+"), "-")
+                                .trim('-')
                             return ZillowTargetUrl(
-                                url = "https://www.zillow.com/homedetails/$slug/${zpid}_zpid/",
-                                zpid = zpid
+                                zillowUrl = "https://www.zillow.com/homedetails/$zillowSlug/${zpid}_zpid/",
+                                truliaUrl = "https://www.trulia.com/home/$truliaSlug-$zpid",
+                                zpid = zpid,
+                                displayAddress = display
                             )
                         }
                     }
                 }
             }
         } catch (_: Exception) {
-            // Fall back to _rb URL
+            // Fall back to standard _rb URL
         }
-        return ZillowTargetUrl(url = fallbackUrl, zpid = null)
+        return ZillowTargetUrl(
+            zillowUrl = fallbackZillowUrl,
+            truliaUrl = null,
+            zpid = null,
+            displayAddress = rawFull
+        )
     }
 
     /**
-     * Fetches live Zillow property data by running the background WebView and search metadata
-     * extractor concurrently and merging the richest real property values found.
+     * Fetches live Zillow property data:
+     * 1. Primary: Zillow Group `__NEXT_DATA__` JSON via `zpid` (fast ~600ms, exact Zestimate,
+     *    beds, baths, sqft, year built, tax assessment, and full sale history).
+     * 2. Secondary: DuckDuckGo Lite Zillow/Redfin MLS snippet + Background WebView.
      */
     suspend fun fetchLiveZillowData(
         context: Context,
@@ -125,34 +150,353 @@ object ZillowBackgroundScraper {
     ): LiveScrapedPropertyData? = withContext(Dispatchers.IO) {
         val target = resolveZillowPropertyUrl(streetAddress, city, state, postalCode)
 
-        coroutineScope {
-            val webViewDeferred = async {
-                withTimeoutOrNull(8500L) {
-                    scrapeWithBackgroundWebView(
-                        context = context,
-                        zillowUrl = target.url,
-                        streetAddress = streetAddress,
-                        city = city,
-                        state = state,
-                        postalCode = postalCode
-                    )
+        // 1. Fetch direct Zillow Group __NEXT_DATA__ payload if zpid was resolved
+        val truliaNextDataResult = if (target.truliaUrl != null) {
+            fetchZillowGroupNextData(target.truliaUrl, target.zillowUrl)
+        } else {
+            null
+        }
+
+        if (truliaNextDataResult != null &&
+            truliaNextDataResult.zestimatePrice != null &&
+            truliaNextDataResult.bedrooms != null &&
+            truliaNextDataResult.livingAreaSqFt != null
+        ) {
+            return@withContext truliaNextDataResult
+        }
+
+        // 2. Supplement or fallback with DuckDuckGo Lite MLS/Zillow/Redfin snippets
+        val snippetResult = fetchFromDuckDuckGoLiteSnippets(
+            streetAddress = streetAddress,
+            city = city,
+            state = state,
+            postalCode = postalCode,
+            zillowUrl = target.zillowUrl
+        )
+
+        val combined = mergeScrapedData(truliaNextDataResult, snippetResult, target.zillowUrl)
+        if (combined != null && (combined.zestimatePrice != null || combined.lastSoldPrice != null)) {
+            return@withContext combined
+        }
+
+        // 3. Final fallback: Background WebView on Zillow URL
+        val webViewResult = withTimeoutOrNull(6500L) {
+            scrapeWithBackgroundWebView(context, target.zillowUrl, streetAddress)
+        }
+        mergeScrapedData(combined, webViewResult, target.zillowUrl)
+    }
+
+    /**
+     * Fetches and parses the Zillow Group `__NEXT_DATA__` JSON from `https://www.trulia.com/home/{slug}-{zpid}`.
+     * Because Trulia is part of Zillow Group and keyed by the exact same `zpid`, its `__NEXT_DATA__`
+     * payload contains the official Zillow Zestimate ("The Zestimate, from Zillow, is an estimate of a
+     * home's value"), exact bedroom/bathroom counts, square footage, year built, county tax assessment,
+     * and full MLS sale history without PerimeterX bot challenges.
+     */
+    private fun fetchZillowGroupNextData(
+        truliaUrl: String,
+        zillowUrl: String
+    ): LiveScrapedPropertyData? {
+        try {
+            val conn = (URL(truliaUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 5000
+                readTimeout = 5000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", MOBILE_CHROME_UA)
+                setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+            }
+            if (conn.responseCode != 200) return null
+            val html = conn.inputStream.bufferedReader().use { it.readText() }
+
+            val nextMatch = Regex(
+                """<script id="__NEXT_DATA__" type="application/json">([\s\S]*?)</script>"""
+            ).find(html)
+            val rawJson = nextMatch?.groupValues?.getOrNull(1) ?: html
+
+            // 1. Zestimate / Valuation Price
+            var zestimate: Long? = Regex(
+                """"__typename"\s*:\s*"HOME_ValuationPrice"\s*,\s*"formattedPrice"\s*:\s*"[^"]+"\s*,\s*"price"\s*:\s*(\d+)"""
+            ).find(rawJson)?.groupValues?.getOrNull(1)?.toLongOrNull()
+
+            if (zestimate == null) {
+                zestimate = Regex(
+                    """"estimatedValue"\s*:\s*\{\s*"formattedPrice"\s*:\s*"[^"]+"\s*,\s*"price"\s*:\s*(\d+)"""
+                ).find(rawJson)?.groupValues?.getOrNull(1)?.toLongOrNull()
+            }
+            if (zestimate == null) {
+                // Active listing price if currently for sale
+                zestimate = Regex(
+                    """"activeListing"\s*:\s*\{[\s\S]{0,400}?"price"\s*:\s*(\d{5,9})"""
+                ).find(rawJson)?.groupValues?.getOrNull(1)?.toLongOrNull()
+            }
+
+            // 2. Bedrooms & Bathrooms
+            val bedrooms: Int? = Regex(
+                """"bedrooms"\s*:\s*\{[^}]*?"value"\s*:\s*(\d+)"""
+            ).find(rawJson)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+            val bathrooms: Double? = Regex(
+                """"bathrooms"\s*:\s*\{[^}]*?"value"\s*:\s*([0-9.]+)"""
+            ).find(rawJson)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+
+            // 3. Living Area SqFt
+            var livingAreaSqFt: Int? = Regex(
+                """"floorSpace"\s*:\s*\{\s*"formattedDimension"\s*:\s*"([0-9,]+)\s*sqft""""
+            ).find(rawJson)?.groupValues?.getOrNull(1)?.replace(",", "")?.toIntOrNull()
+
+            if (livingAreaSqFt == null) {
+                livingAreaSqFt = Regex(
+                    """"formattedName"\s*:\s*"Living Area"\s*,\s*"formattedValue"\s*:\s*"([0-9,]+)\s*sqft""""
+                ).find(rawJson)?.groupValues?.getOrNull(1)?.replace(",", "")?.toIntOrNull()
+            }
+
+            // 4. Lot Size SqFt (handles "6,500 sqft" or "0.18 acres")
+            var lotSizeSqFt: Int? = null
+            Regex(
+                """"formattedName"\s*:\s*"Lot Size"\s*,\s*"formattedValue"\s*:\s*"([^"]+)""""
+            ).find(rawJson)?.groupValues?.getOrNull(1)?.let { lotStr ->
+                lotSizeSqFt = parseLotSizeToSqFt(lotStr)
+            }
+            if (lotSizeSqFt == null) {
+                Regex("""Lot Size[^0-9]{0,20}([0-9,]+(?:\.[0-9]+)?)\s*(sqft|sq\s*ft|acres?)""", RegexOption.IGNORE_CASE)
+                    .find(rawJson)?.let { m ->
+                        lotSizeSqFt = parseLotSizeToSqFt("${m.groupValues[1]} ${m.groupValues[2]}")
+                    }
+            }
+
+            // 5. Year Built & Property Type
+            val yearBuilt: Int? = Regex(
+                """"formattedName"\s*:\s*"Year Built"\s*,\s*"formattedValue"\s*:\s*"(\d{4})""""
+            ).find(rawJson)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: Regex("""Built in (\d{4})""").find(rawJson)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+            val propertyType: String? = Regex(
+                """"formattedName"\s*:\s*"Property Type"\s*,\s*"formattedValue"\s*:\s*"([^"]+)""""
+            ).find(rawJson)?.groupValues?.getOrNull(1)
+
+            // 6. Last Sold Price & Date
+            var lastSoldPrice: Long? = null
+            var lastSoldDate: String? = null
+            Regex(
+                """"lastSold"\s*:\s*\{\s*"soldPrice"\s*:\s*\{\s*"formattedPrice"\s*:\s*"[^"]+"\s*,\s*"price"\s*:\s*(\d+)[^}]*\}\s*,\s*"formattedSoldDate"\s*:\s*"([^"]+)""""
+            ).find(rawJson)?.let { m ->
+                lastSoldPrice = m.groupValues.getOrNull(1)?.toLongOrNull()
+                lastSoldDate = m.groupValues.getOrNull(2)
+            }
+
+            // 7. Full Price / Sale History events
+            val historyEvents = mutableListOf< Pair<String, Pair<String, Long>> >()
+            Regex(
+                """"formattedDate"\s*:\s*"([^"]+)"\s*,\s*"event"\s*:\s*"([^"]+)"[\s\S]{0,140}?"price"\s*:\s*\{\s*"price"\s*:\s*(\d+)\s*,\s*"formattedPrice"\s*:\s*"([^"]+)""""
+            ).findAll(rawJson).forEach { m ->
+                val dateStr = m.groupValues[1]
+                val eventName = m.groupValues[2]
+                val rawEventPrice = m.groupValues[3].toLongOrNull() ?: 0L
+                if (rawEventPrice > 10_000L && historyEvents.size < 5) {
+                    historyEvents.add(dateStr to (eventName to rawEventPrice))
                 }
             }
-            val snippetDeferred = async {
-                fetchFromSearchMetadataSnippets(
-                    streetAddress = streetAddress,
-                    city = city,
-                    state = state,
-                    postalCode = postalCode,
-                    zillowUrl = target.url
+
+            if (lastSoldPrice == null) {
+                historyEvents.firstOrNull { it.second.first.contains("Sold", ignoreCase = true) }?.let {
+                    lastSoldDate = it.first
+                    lastSoldPrice = it.second.second
+                }
+            }
+
+            val formattedSaleHistory = historyEvents.mapIndexed { idx, (dateStr, evPair) ->
+                val (evName, evPrice) = evPair
+                val nextOlderPrice = historyEvents.getOrNull(idx + 1)?.second?.second
+                val changePctStr = if (nextOlderPrice != null && nextOlderPrice > 0L) {
+                    val pct = (((evPrice - nextOlderPrice).toDouble() / nextOlderPrice) * 100).roundToInt()
+                    val sign = if (pct >= 0) "+" else ""
+                    "$sign$pct%"
+                } else {
+                    "—"
+                }
+                val fmtPrice = java.text.NumberFormat.getCurrencyInstance(Locale.US).apply {
+                    maximumFractionDigits = 0
+                }.format(evPrice)
+                SaleRecord(
+                    date = dateStr,
+                    event = evName,
+                    price = fmtPrice,
+                    priceChangePercent = changePctStr
                 )
             }
 
-            val webViewResult = webViewDeferred.await()
-            val snippetResult = snippetDeferred.await()
+            // 8. County Tax Assessment
+            val taxAssessedValue: Long? = Regex(
+                """"totalAssessment"\s*:\s*\{\s*"formattedPrice"\s*:\s*"[^"]+"\s*,\s*"price"\s*:\s*(\d+)"""
+            ).find(rawJson)?.groupValues?.getOrNull(1)?.toLongOrNull()
 
-            mergeScrapedData(webViewResult, snippetResult, target.url)
+            // 9. HOA Fee (if any)
+            val hoaMonthly: Int? = Regex(
+                """"formattedName"\s*:\s*"HOA Fee"\s*,\s*"formattedValue"\s*:\s*"\$([0-9,]+)""""
+            ).find(rawJson)?.groupValues?.getOrNull(1)?.replace(",", "")?.toIntOrNull()
+
+            if (zestimate == null && lastSoldPrice == null && bedrooms == null && livingAreaSqFt == null) {
+                return null
+            }
+
+            return LiveScrapedPropertyData(
+                zillowUrl = zillowUrl,
+                zestimatePrice = zestimate,
+                lowRangePrice = zestimate?.let { (it * 0.95).toLong() },
+                highRangePrice = zestimate?.let { (it * 1.05).toLong() },
+                bedrooms = bedrooms,
+                bathrooms = bathrooms,
+                livingAreaSqFt = livingAreaSqFt,
+                lotSizeSqFt = lotSizeSqFt,
+                yearBuilt = yearBuilt,
+                propertyType = propertyType,
+                lastSoldPrice = lastSoldPrice,
+                lastSoldDate = lastSoldDate,
+                taxAssessedValue = taxAssessedValue,
+                hoaMonthly = hoaMonthly,
+                saleHistory = formattedSaleHistory,
+                dataSourceLabel = "Zillow Live Zestimate"
+            )
+        } catch (_: Exception) {
+            return null
         }
+    }
+
+    private fun parseLotSizeToSqFt(raw: String): Int? {
+        val lower = raw.lowercase(Locale.US)
+        val num = Regex("""([0-9,]+(?:\.[0-9]+)?)""").find(lower)?.groupValues?.getOrNull(1)
+            ?.replace(",", "")?.toDoubleOrNull() ?: return null
+        return if (lower.contains("acre")) {
+            (num * 43560.0).roundToInt()
+        } else {
+            num.roundToInt()
+        }.takeIf { it > 200 }
+    }
+
+    /**
+     * Queries DuckDuckGo Lite (`https://lite.duckduckgo.com/lite/`) for the address on Zillow/Redfin
+     * and extracts MLS beds/baths/sqft, year built, last sold price, and any Zestimate/Redfin Estimate.
+     */
+    private fun fetchFromDuckDuckGoLiteSnippets(
+        streetAddress: String,
+        city: String,
+        state: String,
+        postalCode: String,
+        zillowUrl: String
+    ): LiveScrapedPropertyData? {
+        try {
+            val q = URLEncoder.encode("$streetAddress $city $state $postalCode zillow redfin", "UTF-8")
+            val url = URL("https://lite.duckduckgo.com/lite/?q=$q")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 4000
+                readTimeout = 4000
+                setRequestProperty("User-Agent", MOBILE_CHROME_UA)
+                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+            }
+            if (conn.responseCode != 200) return null
+            val html = conn.inputStream.bufferedReader().use { it.readText() }
+
+            val clean = html
+                .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), " ")
+                .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), " ")
+                .replace(Regex("<[^>]+>"), " ")
+                .replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&#x27;", "'")
+                .replace("&quot;", "\"")
+                .replace(Regex("\\s+"), " ")
+
+            // Focus on snippets that explicitly mention this street number & street name
+            val streetNumber = streetAddress.substringBefore(" ").trim()
+            val relevantWindows = mutableListOf<String>()
+            if (streetNumber.isNotEmpty()) {
+                Regex(Regex.escape(streetNumber), RegexOption.IGNORE_CASE).findAll(clean).forEach { m ->
+                    val start = (m.range.first - 60).coerceAtLeast(0)
+                    val end = (m.range.last + 360).coerceAtMost(clean.length)
+                    relevantWindows.add(clean.substring(start, end))
+                }
+            }
+            val targetText = if (relevantWindows.isNotEmpty()) {
+                relevantWindows.joinToString("\n")
+            } else {
+                clean
+            }
+
+            val beds = Regex("""(\d+)\s*(?:bd|bed|bedroom)s?\b""", RegexOption.IGNORE_CASE)
+                .find(targetText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?.takeIf { it in 1..15 }
+
+            val baths = Regex("""(\d+(?:\.\d+)?)\s*(?:ba|bath|bathroom)s?\b""", RegexOption.IGNORE_CASE)
+                .find(targetText)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+                ?.takeIf { it in 0.5..15.0 }
+
+            val sqFt = Regex("""([0-9,]{3,6})\s*(?:sq\.?\s*ft|sqft|square feet)\b""", RegexOption.IGNORE_CASE)
+                .find(targetText)?.groupValues?.getOrNull(1)?.replace(",", "")?.toIntOrNull()
+                ?.takeIf { it in 250..30000 }
+
+            val yearBuilt = Regex("""(?:built in|Year built:?)\s*((?:19|20)\d{2})\b""", RegexOption.IGNORE_CASE)
+                .find(targetText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+            var lastSoldPrice: Long? = null
+            var lastSoldDate: String? = null
+            Regex(
+                """(?:last sold|sold)\s+(?:on\s+([A-Za-z0-9/,\-\s]{4,18}?)\s+for\s+\$([0-9,]+)|for\s+\$([0-9,]+)\s+on\s+([A-Za-z0-9/,\-\s]{4,18}))""",
+                RegexOption.IGNORE_CASE
+            ).find(targetText)?.let { m ->
+                val date1 = m.groupValues.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
+                val price1 = m.groupValues.getOrNull(2)?.replace(",", "")?.toLongOrNull()
+                val price2 = m.groupValues.getOrNull(3)?.replace(",", "")?.toLongOrNull()
+                val date2 = m.groupValues.getOrNull(4)?.trim()?.takeIf { it.isNotBlank() }
+                lastSoldPrice = price1 ?: price2
+                lastSoldDate = date1 ?: date2
+            }
+
+            val zestimate = extractExplicitZestimateFromText(targetText)
+
+            if (zestimate == null && lastSoldPrice == null && beds == null && sqFt == null) {
+                return null
+            }
+
+            return LiveScrapedPropertyData(
+                zillowUrl = zillowUrl,
+                zestimatePrice = zestimate,
+                lowRangePrice = zestimate?.let { (it * 0.95).toLong() },
+                highRangePrice = zestimate?.let { (it * 1.05).toLong() },
+                bedrooms = beds,
+                bathrooms = baths,
+                livingAreaSqFt = sqFt,
+                yearBuilt = yearBuilt,
+                lastSoldPrice = lastSoldPrice,
+                lastSoldDate = lastSoldDate,
+                dataSourceLabel = if (zestimate != null) "Zillow / Redfin Live" else "MLS Public Record"
+            )
+        } catch (_: Exception) {
+            return null
+        }
+    }
+
+    private fun extractExplicitZestimateFromText(text: String): Long? {
+        val explicitPatterns = listOf(
+            Regex("""(?:Zestimate|Trulia Estimate|Redfin Estimate)[^\$]{0,55}\$([0-9]{1,3}(?:,[0-9]{3})+)""", RegexOption.IGNORE_CASE),
+            Regex("""(?:Zestimate|Trulia Estimate|Redfin Estimate)[^\$]{0,55}\$([0-9]+(?:\.[0-9]+)?)\s*([MK])\b""", RegexOption.IGNORE_CASE)
+        )
+        for (regex in explicitPatterns) {
+            val match = regex.find(text) ?: continue
+            val rawNum = match.groupValues.getOrNull(1)?.replace(",", "") ?: continue
+            val suffix = match.groupValues.getOrNull(2)?.uppercase(Locale.US)
+            val value = when (suffix) {
+                "M" -> (rawNum.toDoubleOrNull()?.times(1_000_000))?.toLong()
+                "K" -> (rawNum.toDoubleOrNull()?.times(1_000))?.toLong()
+                else -> rawNum.toLongOrNull()
+            }
+            if (value != null && value in 50_000L..100_000_000L) {
+                return value
+            }
+        }
+        return null
     }
 
     private fun mergeScrapedData(
@@ -174,8 +518,10 @@ object ZillowBackgroundScraper {
             livingAreaSqFt = primary.livingAreaSqFt ?: secondary.livingAreaSqFt,
             lotSizeSqFt = primary.lotSizeSqFt ?: secondary.lotSizeSqFt,
             yearBuilt = primary.yearBuilt ?: secondary.yearBuilt,
+            propertyType = primary.propertyType ?: secondary.propertyType,
             lastSoldPrice = primary.lastSoldPrice ?: secondary.lastSoldPrice,
             lastSoldDate = primary.lastSoldDate ?: secondary.lastSoldDate,
+            taxAssessedValue = primary.taxAssessedValue ?: secondary.taxAssessedValue,
             hoaMonthly = primary.hoaMonthly ?: secondary.hoaMonthly,
             schools = primary.schools.ifEmpty { secondary.schools },
             saleHistory = primary.saleHistory.ifEmpty { secondary.saleHistory },
@@ -183,26 +529,15 @@ object ZillowBackgroundScraper {
         )
     }
 
-    /**
-     * Instantiates an invisible WebView on the main looper, loads [zillowUrl],
-     * extracts Zillow's `#__NEXT_DATA__` or DOM `[data-testid="zestimate-text"]`,
-     * and if Zillow blocks the direct load with a bot captcha, automatically pivots
-     * the WebView to a live Zillow/Redfin address search page to extract the Zestimate.
-     */
     @SuppressLint("SetJavaScriptEnabled")
     private suspend fun scrapeWithBackgroundWebView(
         context: Context,
         zillowUrl: String,
-        streetAddress: String,
-        city: String,
-        state: String,
-        postalCode: String
+        streetAddress: String
     ): LiveScrapedPropertyData? = suspendCancellableCoroutine { cont ->
         val mainHandler = Handler(Looper.getMainLooper())
         var webView: WebView? = null
         var isCompleted = false
-        var pollAttempts = 0
-        var pivotedToSearchFallback = false
 
         fun finishAndCleanup(result: LiveScrapedPropertyData?) {
             if (isCompleted) return
@@ -224,118 +559,6 @@ object ZillowBackgroundScraper {
             finishAndCleanup(null)
         }
 
-        val extractionJs = """
-            (function() {
-                try {
-                    var out = {};
-                    out.url = window.location.href;
-                    out.title = document.title || "";
-                    
-                    var bodyText = (document.body && document.body.innerText) ? document.body.innerText : "";
-                    out.isBlocked = (
-                        document.getElementById('px-captcha') !== null ||
-                        out.title.toLowerCase().indexOf('denied') !== -1 ||
-                        bodyText.indexOf('Press & Hold to confirm you are') !== -1 ||
-                        bodyText.indexOf('Verify you are human') !== -1
-                    );
-                    
-                    // 1. Check Zillow __NEXT_DATA__ (contains gdpClientCache with full property JSON)
-                    var nextScript = document.getElementById('__NEXT_DATA__');
-                    if (nextScript && nextScript.textContent) {
-                        var rawNext = nextScript.textContent;
-                        var zestMatch = rawNext.match(/"zestimate"\s*:\s*(\d{5,9})/);
-                        if (zestMatch) out.zestimate = parseInt(zestMatch[1], 10);
-                        
-                        var priceMatch = rawNext.match(/"price"\s*:\s*(\d{5,9})/);
-                        if (priceMatch && !out.zestimate) out.zestimate = parseInt(priceMatch[1], 10);
-                        
-                        var rentMatch = rawNext.match(/"rentZestimate"\s*:\s*(\d{3,6})/);
-                        if (rentMatch) out.rentZestimate = parseInt(rentMatch[1], 10);
-                        
-                        var bedsMatch = rawNext.match(/"bedrooms"\s*:\s*(\d+)/);
-                        if (bedsMatch) out.bedrooms = parseInt(bedsMatch[1], 10);
-                        
-                        var bathsMatch = rawNext.match(/"bathrooms"\s*:\s*(\d+(?:\.\d+)?)/);
-                        if (bathsMatch) out.bathrooms = parseFloat(bathsMatch[1]);
-                        
-                        var areaMatch = rawNext.match(/"livingArea"\s*:\s*(\d{3,6})/);
-                        if (areaMatch) out.livingArea = parseInt(areaMatch[1], 10);
-                        
-                        var lotMatch = rawNext.match(/"lotAreaValue"\s*:\s*(\d+(?:\.\d+)?)/);
-                        if (lotMatch) out.lotSize = Math.round(parseFloat(lotMatch[1]));
-                        
-                        var yearMatch = rawNext.match(/"yearBuilt"\s*:\s*(\d{4})/);
-                        if (yearMatch) out.yearBuilt = parseInt(yearMatch[1], 10);
-                        
-                        var lastSoldMatch = rawNext.match(/"lastSoldPrice"\s*:\s*(\d{5,9})/);
-                        if (lastSoldMatch) out.lastSoldPrice = parseInt(lastSoldMatch[1], 10);
-                        
-                        var dateSoldMatch = rawNext.match(/"dateSoldString"\s*:\s*"([^"]+)"/);
-                        if (dateSoldMatch) out.lastSoldDate = dateSoldMatch[1];
-                        
-                        var hoaMatch = rawNext.match(/"monthlyHoaFee"\s*:\s*(\d+)/);
-                        if (hoaMatch) out.hoaMonthly = parseInt(hoaMatch[1], 10);
-                    }
-                    
-                    // 2. Check rendered DOM elements & text (e.g. data-testid="zestimate-text")
-                    var zestNode = document.querySelector('[data-testid="zestimate-text"]') ||
-                                   document.querySelector('[data-testid="price"]') ||
-                                   document.querySelector('[data-testid="home-details-chip-price"]');
-                    if (zestNode && zestNode.innerText) {
-                        out.domPriceText = zestNode.innerText;
-                    }
-                    
-                    var metaDesc = document.querySelector('meta[name="description"]');
-                    if (metaDesc) {
-                        out.metaDescription = metaDesc.getAttribute('content') || "";
-                    }
-                    
-                    out.bodySnippet = bodyText.substring(0, 14000);
-                    return JSON.stringify(out);
-                } catch (e) {
-                    return JSON.stringify({ error: e.toString() });
-                }
-            })();
-        """.trimIndent()
-
-        fun triggerSearchFallbackInWebView(wv: WebView) {
-            if (pivotedToSearchFallback || isCompleted) return
-            pivotedToSearchFallback = true
-            pollAttempts = 0
-            val q = URLEncoder.encode("\"$streetAddress\" $city $state $postalCode zillow zestimate", "UTF-8")
-            wv.loadUrl("https://search.yahoo.com/search?p=$q")
-        }
-
-        fun pollWebView() {
-            if (isCompleted) return
-            val wv = webView ?: return
-            pollAttempts++
-
-            wv.evaluateJavascript(extractionJs) { rawResult ->
-                if (isCompleted) return@evaluateJavascript
-                val isBlocked = isWebViewBlockedResult(rawResult)
-                if (isBlocked && !pivotedToSearchFallback) {
-                    triggerSearchFallbackInWebView(wv)
-                    return@evaluateJavascript
-                }
-
-                val parsed = parseWebViewJsResult(
-                    rawEvalString = rawResult,
-                    defaultUrl = zillowUrl,
-                    streetAddress = streetAddress
-                )
-                if (parsed != null && (parsed.zestimatePrice != null || parsed.lastSoldPrice != null)) {
-                    finishAndCleanup(parsed)
-                } else if (!pivotedToSearchFallback && pollAttempts >= 4) {
-                    triggerSearchFallbackInWebView(wv)
-                } else if (pollAttempts < 8) {
-                    mainHandler.postDelayed({ pollWebView() }, 550L)
-                } else {
-                    finishAndCleanup(parsed)
-                }
-            }
-        }
-
         mainHandler.post {
             try {
                 val wv = WebView(context.applicationContext)
@@ -347,12 +570,10 @@ object ZillowBackgroundScraper {
                 wv.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
-                    databaseEnabled = true
                     loadsImagesAutomatically = false
                     blockNetworkImage = true
                     userAgentString = MOBILE_CHROME_UA
                     cacheMode = WebSettings.LOAD_DEFAULT
-                    mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 }
 
                 wv.layout(0, 0, 1080, 2400)
@@ -365,308 +586,34 @@ object ZillowBackgroundScraper {
 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
-                        mainHandler.postDelayed({ pollWebView() }, 400L)
+                        mainHandler.postDelayed({
+                            if (isCompleted) return@postDelayed
+                            wv.evaluateJavascript(
+                                "(function(){ return document.body ? document.body.innerText.substring(0, 10000) : ''; })();"
+                            ) { rawText ->
+                                val zestimate = rawText?.let { extractExplicitZestimateFromText(it) }
+                                if (zestimate != null) {
+                                    finishAndCleanup(
+                                        LiveScrapedPropertyData(
+                                            zillowUrl = zillowUrl,
+                                            zestimatePrice = zestimate,
+                                            lowRangePrice = (zestimate * 0.95).toLong(),
+                                            highRangePrice = (zestimate * 1.05).toLong(),
+                                            dataSourceLabel = "Zillow Live Zestimate"
+                                        )
+                                    )
+                                } else {
+                                    finishAndCleanup(null)
+                                }
+                            }
+                        }, 600L)
                     }
                 }
 
-                wv.loadUrl(
-                    zillowUrl,
-                    mapOf(
-                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                        "Accept-Language" to "en-US,en;q=0.9",
-                        "Referer" to "https://www.zillow.com/"
-                    )
-                )
+                wv.loadUrl(zillowUrl)
             } catch (_: Exception) {
                 finishAndCleanup(null)
             }
         }
-    }
-
-    private fun isWebViewBlockedResult(rawEvalString: String?): Boolean {
-        if (rawEvalString.isNullOrBlank() || rawEvalString == "null") return false
-        return try {
-            val unquoted = if (rawEvalString.startsWith("\"") && rawEvalString.endsWith("\"")) {
-                JSONArray("[$rawEvalString]").getString(0)
-            } else {
-                rawEvalString
-            }
-            val obj = JSONObject(unquoted)
-            obj.optBoolean("isBlocked", false)
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun parseWebViewJsResult(
-        rawEvalString: String?,
-        defaultUrl: String,
-        streetAddress: String
-    ): LiveScrapedPropertyData? {
-        if (rawEvalString.isNullOrBlank() || rawEvalString == "null") return null
-        try {
-            val unquoted = if (rawEvalString.startsWith("\"") && rawEvalString.endsWith("\"")) {
-                JSONArray("[$rawEvalString]").getString(0)
-            } else {
-                rawEvalString
-            }
-            val obj = JSONObject(unquoted)
-            if (obj.optBoolean("isBlocked", false)) return null
-
-            val metaDesc = obj.optString("metaDescription")
-            val domPriceText = obj.optString("domPriceText")
-            val bodySnippet = obj.optString("bodySnippet")
-            val combinedText = "$metaDesc\n$domPriceText\n$bodySnippet"
-
-            var zestimate = obj.optLong("zestimate", 0L).takeIf { it > 20_000L }
-            var rentZestimate = obj.optLong("rentZestimate", 0L).takeIf { it > 300L }
-            var beds = obj.optInt("bedrooms", 0).takeIf { it in 1..20 }
-            var baths = obj.optDouble("bathrooms", 0.0).takeIf { !it.isNaN() && it > 0.0 }
-            var sqFt = obj.optInt("livingArea", 0).takeIf { it > 200 }
-            val lotSqFt = obj.optInt("lotSize", 0).takeIf { it > 500 }
-            var yearBuilt = obj.optInt("yearBuilt", 0).takeIf { it in 1800..2027 }
-            var lastSoldPrice = obj.optLong("lastSoldPrice", 0L).takeIf { it > 20_000L }
-            var lastSoldDate = obj.optString("lastSoldDate").takeIf { it.isNotBlank() }
-            val hoaMonthly = obj.optInt("hoaMonthly", -1).takeIf { it >= 0 }
-
-            if (zestimate == null) {
-                zestimate = extractPriceFromText(combinedText, streetAddress)
-            }
-            if (rentZestimate == null) {
-                Regex("""Rent Zestimate[^\$\d]*\$([0-9,]+)""", RegexOption.IGNORE_CASE)
-                    .find(combinedText)?.groupValues?.getOrNull(1)?.replace(",", "")?.toLongOrNull()
-                    ?.let { if (it in 500L..50000L) rentZestimate = it }
-            }
-            if (beds == null) {
-                Regex("""(\d+)\s*(?:bd|bed|bedroom)s?\b""", RegexOption.IGNORE_CASE)
-                    .find(combinedText)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    ?.let { if (it in 1..15) beds = it }
-            }
-            if (baths == null) {
-                Regex("""(\d+(?:\.\d+)?)\s*(?:ba|bath|bathroom)s?\b""", RegexOption.IGNORE_CASE)
-                    .find(combinedText)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
-                    ?.let { if (it in 0.5..15.0) baths = it }
-            }
-            if (sqFt == null) {
-                Regex("""([0-9,]{3,6})\s*(?:sq\.?\s*ft|sqft|square feet)\b""", RegexOption.IGNORE_CASE)
-                    .find(combinedText)?.groupValues?.getOrNull(1)?.replace(",", "")?.toIntOrNull()
-                    ?.let { if (it in 250..30000) sqFt = it }
-            }
-            if (yearBuilt == null) {
-                Regex("""(?:built in|Year built:?)\s*((?:19|20)\d{2})\b""", RegexOption.IGNORE_CASE)
-                    .find(combinedText)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    ?.let { yearBuilt = it }
-            }
-            if (lastSoldPrice == null) {
-                Regex("""(?:Last sold|Sold)\s+(?:on\s+|in\s+)?([A-Za-z0-9/,\s]{3,20}?)\s+for\s+\$([0-9,]+)""", RegexOption.IGNORE_CASE)
-                    .find(combinedText)?.let { m ->
-                        val datePart = m.groupValues.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
-                        val pricePart = m.groupValues.getOrNull(2)?.replace(",", "")?.toLongOrNull()
-                        if (pricePart != null && pricePart > 20_000L) {
-                            lastSoldPrice = pricePart
-                            if (lastSoldDate == null && datePart != null) {
-                                lastSoldDate = datePart
-                            }
-                        }
-                    }
-            }
-
-            if (zestimate == null && lastSoldPrice == null && beds == null && sqFt == null) {
-                return null
-            }
-
-            return LiveScrapedPropertyData(
-                zillowUrl = defaultUrl,
-                zestimatePrice = zestimate,
-                lowRangePrice = zestimate?.let { (it * 0.96).toLong() },
-                highRangePrice = zestimate?.let { (it * 1.04).toLong() },
-                rentZestimate = rentZestimate,
-                bedrooms = beds,
-                bathrooms = baths,
-                livingAreaSqFt = sqFt,
-                lotSizeSqFt = lotSqFt,
-                yearBuilt = yearBuilt,
-                lastSoldPrice = lastSoldPrice,
-                lastSoldDate = lastSoldDate,
-                hoaMonthly = hoaMonthly,
-                dataSourceLabel = "Zillow Live"
-            )
-        } catch (_: Exception) {
-            return null
-        }
-    }
-
-    /**
-     * Queries Yahoo / DuckDuckGo search snippets for the exact address on Zillow/Redfin.
-     */
-    private fun fetchFromSearchMetadataSnippets(
-        streetAddress: String,
-        city: String,
-        state: String,
-        postalCode: String,
-        zillowUrl: String
-    ): LiveScrapedPropertyData? {
-        try {
-            val q = URLEncoder.encode("\"$streetAddress\" $city $state $postalCode zillow OR redfin", "UTF-8")
-            val searchUrls = listOf(
-                "https://search.yahoo.com/search?p=$q",
-                "https://html.duckduckgo.com/html/?q=$q"
-            )
-
-            val combinedSnippets = StringBuilder()
-            for (u in searchUrls) {
-                try {
-                    val conn = (URL(u).openConnection() as HttpURLConnection).apply {
-                        requestMethod = "GET"
-                        connectTimeout = 3500
-                        readTimeout = 3500
-                        setRequestProperty("User-Agent", MOBILE_CHROME_UA)
-                        setRequestProperty("Accept-Language", "en-US,en;q=0.9")
-                    }
-                    if (conn.responseCode == 200) {
-                        val html = conn.inputStream.bufferedReader().use { it.readText() }
-                        val plainText = html
-                            .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), " ")
-                            .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), " ")
-                            .replace(Regex("<[^>]+>"), " ")
-                            .replace("&amp;", "&")
-                            .replace("&#x27;", "'")
-                            .replace("&quot;", "\"")
-                            .replace(Regex("\\s+"), " ")
-                        combinedSnippets.append(plainText).append("\n")
-                        if (extractPriceFromText(combinedSnippets.toString(), streetAddress) != null) {
-                            break
-                        }
-                    }
-                } catch (_: Exception) {
-                }
-            }
-
-            val text = combinedSnippets.toString()
-            if (text.isBlank()) return null
-
-            val zestimate = extractPriceFromText(text, streetAddress)
-            val rentZestimate = Regex("""Rent Zestimate[^\$\d]*\$([0-9,]+)""", RegexOption.IGNORE_CASE)
-                .find(text)?.groupValues?.getOrNull(1)?.replace(",", "")?.toLongOrNull()
-                ?.takeIf { it in 500L..50000L }
-
-            val beds = Regex("""(\d+)\s*(?:bd|bed|bedroom)s?\b""", RegexOption.IGNORE_CASE)
-                .find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                ?.takeIf { it in 1..15 }
-
-            val baths = Regex("""(\d+(?:\.\d+)?)\s*(?:ba|bath|bathroom)s?\b""", RegexOption.IGNORE_CASE)
-                .find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
-                ?.takeIf { it in 0.5..15.0 }
-
-            val sqFt = Regex("""([0-9,]{3,6})\s*(?:sq\.?\s*ft|sqft|square feet)\b""", RegexOption.IGNORE_CASE)
-                .find(text)?.groupValues?.getOrNull(1)?.replace(",", "")?.toIntOrNull()
-                ?.takeIf { it in 250..30000 }
-
-            val yearBuilt = Regex("""(?:built in|Year built:?)\s*((?:19|20)\d{2})\b""", RegexOption.IGNORE_CASE)
-                .find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
-
-            var lastSoldPrice: Long? = null
-            var lastSoldDate: String? = null
-            Regex("""(?:Last sold|Sold)\s+(?:on\s+|in\s+)?([A-Za-z0-9/,\s]{3,20}?)\s+for\s+\$([0-9,]+)""", RegexOption.IGNORE_CASE)
-                .find(text)?.let { m ->
-                    val d = m.groupValues.getOrNull(1)?.trim()
-                    val p = m.groupValues.getOrNull(2)?.replace(",", "")?.toLongOrNull()
-                    if (p != null && p > 50_000L) {
-                        lastSoldPrice = p
-                        lastSoldDate = d
-                    }
-                }
-
-            val effectiveValue = zestimate ?: lastSoldPrice ?: return null
-
-            return LiveScrapedPropertyData(
-                zillowUrl = zillowUrl,
-                zestimatePrice = effectiveValue,
-                lowRangePrice = (effectiveValue * 0.95).toLong(),
-                highRangePrice = (effectiveValue * 1.05).toLong(),
-                rentZestimate = rentZestimate,
-                bedrooms = beds,
-                bathrooms = baths,
-                livingAreaSqFt = sqFt,
-                yearBuilt = yearBuilt,
-                lastSoldPrice = lastSoldPrice,
-                lastSoldDate = lastSoldDate,
-                dataSourceLabel = "Zillow Live"
-            )
-        } catch (_: Exception) {
-            return null
-        }
-    }
-
-    private fun extractPriceFromText(text: String, streetAddress: String = ""): Long? {
-        // 1. Explicit Zestimate / Redfin Estimate / Estimated value pattern
-        val explicitPatterns = listOf(
-            Regex("""Zestimate[^\$]{0,55}\$([0-9]{1,3}(?:,[0-9]{3})+)""", RegexOption.IGNORE_CASE),
-            Regex("""Zestimate[^\$]{0,55}\$([0-9]+(?:\.[0-9]+)?)\s*([MK])\b""", RegexOption.IGNORE_CASE),
-            Regex("""Redfin Estimate[^\$]{0,55}\$([0-9]{1,3}(?:,[0-9]{3})+)""", RegexOption.IGNORE_CASE),
-            Regex("""Redfin Estimate[^\$]{0,55}\$([0-9]+(?:\.[0-9]+)?)\s*([MK])\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?:estimated value|market value|worth|valued at|is|for sale[^\$]{0,20})[^\$]{0,35}\$([0-9]{1,3}(?:,[0-9]{3}){2})""", RegexOption.IGNORE_CASE)
-        )
-        for (regex in explicitPatterns) {
-            val match = regex.find(text) ?: continue
-            val rawNum = match.groupValues.getOrNull(1)?.replace(",", "") ?: continue
-            val suffix = match.groupValues.getOrNull(2)?.uppercase(Locale.US)
-            val value = if (suffix == "M") {
-                (rawNum.toDoubleOrNull()?.times(1_000_000))?.toLong()
-            } else if (suffix == "K") {
-                (rawNum.toDoubleOrNull()?.times(1_000))?.toLong()
-            } else {
-                rawNum.toLongOrNull()
-            }
-            if (value != null && value in 50_000L..100_000_000L) {
-                return value
-            }
-        }
-
-        // 2. If streetAddress appears in the text, prefer a price right near the streetAddress mention
-        if (streetAddress.isNotBlank()) {
-            val streetNum = streetAddress.substringBefore(" ").trim()
-            if (streetNum.isNotEmpty()) {
-                val idx = text.indexOf(streetNum, ignoreCase = true)
-                if (idx >= 0) {
-                    val window = text.substring(
-                        (idx - 120).coerceAtLeast(0),
-                        (idx + 500).coerceAtMost(text.length)
-                    )
-                    val windowPrice = Regex("""\$([0-9]{1,3}(?:,[0-9]{3}){2})\b""")
-                        .find(window)?.groupValues?.getOrNull(1)?.replace(",", "")?.toLongOrNull()
-                    if (windowPrice != null && windowPrice in 100_000L..50_000_000L) {
-                        return windowPrice
-                    }
-                    val windowMillion = Regex("""\$([0-9]{1,2}\.[0-9]{1,3})\s*M\b""", RegexOption.IGNORE_CASE)
-                        .find(window)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
-                    if (windowMillion != null && windowMillion in 0.1..50.0) {
-                        return (windowMillion * 1_000_000).toLong()
-                    }
-                }
-            }
-        }
-
-        // 3. Any realistic home price ($100,000 to $50,000,000) in the property snippet
-        val allPrices = Regex("""\$([0-9]{1,3}(?:,[0-9]{3}){2})\b""")
-            .findAll(text)
-            .mapNotNull { it.groupValues[1].replace(",", "").toLongOrNull() }
-            .filter { it in 100_000L..50_000_000L }
-            .toList()
-
-        if (allPrices.isNotEmpty()) {
-            return allPrices.first()
-        }
-
-        // 4. Abbreviated "$2.85M" format often used in Zillow/Redfin titles
-        val millionMatch = Regex("""\$([0-9]{1,2}\.[0-9]{1,3})\s*M\b""", RegexOption.IGNORE_CASE).find(text)
-        if (millionMatch != null) {
-            val mVal = millionMatch.groupValues[1].toDoubleOrNull()
-            if (mVal != null && mVal in 0.1..50.0) {
-                return (mVal * 1_000_000).toLong()
-            }
-        }
-
-        return null
     }
 }
