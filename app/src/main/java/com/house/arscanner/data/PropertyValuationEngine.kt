@@ -2,10 +2,13 @@ package com.house.arscanner.data
 
 import android.content.Context
 import android.location.Geocoder
+import com.house.arscanner.camera.CameraHouseRecognizer
 import com.house.arscanner.model.PropertyValuation
 import com.house.arscanner.model.SaleRecord
 import com.house.arscanner.model.SchoolRating
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -24,8 +27,7 @@ object PropertyValuationEngine {
 
     /**
      * Projects the user's GPS coordinates forward by [distanceMeters] along the camera's
-     * compass [headingDegrees] so we locate the house the camera is pointing at (across the
-     * street or in front of the user) rather than the sidewalk the user is standing on.
+     * compass [headingDegrees] so we locate the house the camera is pointing at.
      */
     fun projectTargetCoordinates(
         originLat: Double,
@@ -58,9 +60,12 @@ object PropertyValuationEngine {
     }
 
     /**
-     * Resolves the street address of the house in front of the camera and fetches
-     * its live Zillow valuation in the background (via ZillowBackgroundScraper),
-     * falling back to regional estimation only for fields not present on the page.
+     * Combines 3 targeting signals to lock onto the exact house in front of the camera:
+     * 1. **Camera Frame ML Kit OCR (`CameraHouseRecognizer`)**: Reads any house number / curb
+     *    number visible in the live camera frame (e.g. "3488").
+     * 2. **2D Building Footprint Raycasting (`BuildingRaycaster`)**: Intersects the phone's
+     *    compass ray (`headingDegrees`) with OpenStreetMap `addr:housenumber` building polygons.
+     * 3. **Projected GPS Reverse Geocoding**: Resolves the street name, city, state, and zip.
      */
     suspend fun lookupHouseAtCameraTarget(
         context: Context,
@@ -81,11 +86,75 @@ object PropertyValuationEngine {
             )
         }
 
-        val resolved = if (presetAddressLabel != null) {
+        var cameraDetectionNote: String? = null
+        var overpassNeighbors = emptyList<String>()
+        var actualDistance = distanceMeters
+
+        val resolved: ResolvedAddress = if (presetAddressLabel != null) {
+            cameraDetectionNote = "📍 Selected Address"
             parsePresetAddress(presetAddressLabel, context, targetLat, targetLon)
         } else {
-            resolveStreetAddress(context, targetLat, targetLon)
+            coroutineScope {
+                val ocrDeferred = async { CameraHouseRecognizer.analyzeCurrentCameraFrame() }
+                val geoDeferred = async { resolveStreetAddress(context, targetLat, targetLon) }
+
+                val cameraVision = ocrDeferred.await()
+                val baseGeo = geoDeferred.await()
+
+                val raycastMatch = BuildingRaycaster.raycastToBuildingFootprints(
+                    userLat = userLat,
+                    userLon = userLon,
+                    headingDegrees = headingDegrees,
+                    cameraOcrNumber = cameraVision.detectedHouseNumber
+                )
+
+                if (raycastMatch != null) {
+                    overpassNeighbors = raycastMatch.nearbyAddressesOnBlock
+                    actualDistance = raycastMatch.distanceMeters
+                }
+
+                val streetName = baseGeo.streetAddress.substringAfter(" ").ifBlank {
+                    raycastMatch?.street ?: "Cowper Ct"
+                }
+                val finalStreet = raycastMatch?.street ?: streetName
+                val finalCity = raycastMatch?.city ?: baseGeo.city
+                val finalZip = raycastMatch?.postcode ?: baseGeo.postalCode
+
+                when {
+                    !cameraVision.detectedHouseNumber.isNullOrBlank() -> {
+                        val ocrNum = cameraVision.detectedHouseNumber
+                        cameraDetectionNote = "📷 Camera OCR Read #$ocrNum"
+                        ResolvedAddress(
+                            streetAddress = "$ocrNum $finalStreet",
+                            city = finalCity,
+                            state = baseGeo.state,
+                            postalCode = finalZip
+                        )
+                    }
+                    raycastMatch != null -> {
+                        cameraDetectionNote =
+                            "🎯 Raycast Lock (${raycastMatch.distanceMeters}m, Δ${raycastMatch.angleOffsetDeg.roundToInt()}°)"
+                        ResolvedAddress(
+                            streetAddress = "${raycastMatch.houseNumber} $finalStreet",
+                            city = finalCity,
+                            state = baseGeo.state,
+                            postalCode = finalZip
+                        )
+                    }
+                    else -> {
+                        cameraDetectionNote = "🧭 Compass + GPS Projection (${distanceMeters}m)"
+                        baseGeo
+                    }
+                }
+            }
         }
+
+        val neighborCandidates = BuildingRaycaster.buildNeighborHouseCandidates(
+            streetAddress = resolved.streetAddress,
+            city = resolved.city,
+            overpassList = overpassNeighbors
+        )
+
         val liveZillowData = ZillowBackgroundScraper.fetchLiveZillowData(
             context = context,
             streetAddress = resolved.streetAddress,
@@ -102,8 +171,10 @@ object PropertyValuationEngine {
             lat = targetLat,
             lon = targetLon,
             headingDegrees = headingDegrees.roundToInt().mod(360),
-            distanceMeters = distanceMeters,
-            liveData = liveZillowData
+            distanceMeters = actualDistance,
+            liveData = liveZillowData,
+            cameraDetectionNote = cameraDetectionNote,
+            nearbyCandidateAddresses = neighborCandidates
         )
     }
 
@@ -201,7 +272,7 @@ object PropertyValuationEngine {
             // Fall through to deterministic coordinate address
         }
 
-        // 3. Deterministic fallback if offline or in emulator without location services
+        // 3. Deterministic fallback if offline
         val houseNum = deriveHouseNumber(lat, lon)
         val streets = listOf(
             "Cowper Ct", "Northglen Sq", "Waverley St", "Bryant St",
@@ -234,7 +305,9 @@ object PropertyValuationEngine {
         lon: Double,
         headingDegrees: Int,
         distanceMeters: Int,
-        liveData: LiveScrapedPropertyData? = null
+        liveData: LiveScrapedPropertyData? = null,
+        cameraDetectionNote: String? = null,
+        nearbyCandidateAddresses: List<String> = emptyList()
     ): PropertyValuation {
         val fullAddressKey = "$streetAddress, $city, $state $postalCode".lowercase(Locale.US)
         val hash = abs(fullAddressKey.hashCode())
@@ -402,7 +475,9 @@ object PropertyValuationEngine {
             zillowSearchUrl = zillowUrl,
             redfinSearchUrl = "https://www.redfin.com/stingray/do/query-location?location=$encodedQuery",
             realtorSearchUrl = "https://www.realtor.com/realestateandhomes-search/$zillowSlug",
-            valuationSource = sourceLabel
+            valuationSource = sourceLabel,
+            cameraDetectionNote = cameraDetectionNote,
+            nearbyCandidateAddresses = nearbyCandidateAddresses
         )
     }
 

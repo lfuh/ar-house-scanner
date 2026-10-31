@@ -44,5 +44,7 @@ data class PropertyValuation(
     val zillowSearchUrl: String,
     val redfinSearchUrl: String,
     val realtorSearchUrl: String,
-    val valuationSource: String = "Zillow Live"
+    val valuationSource: String = "Zillow Live",
+    val cameraDetectionNote: String? = null,
+    val nearbyCandidateAddresses: List<String> = emptyList()
 )

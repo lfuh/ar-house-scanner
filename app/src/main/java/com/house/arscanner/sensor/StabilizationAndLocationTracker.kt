@@ -13,13 +13,13 @@ import android.os.Bundle
 import kotlin.math.sqrt
 
 /**
- * Tracks live GPS coordinates, compass heading (azimuth 0..360°), and phone camera
- * motion stability. When the user holds the phone steady pointing at a house for
- * [stabilizationDurationMs] (default 1.8 seconds), [onStabilizedLock] fires automatically.
+ * Tracks live hardware GPS coordinates, compass heading (azimuth 0..360°), and phone camera
+ * motion stability. Keeps hardware GPS coordinates strictly separate from indoor preset
+ * test locations so tapping "Scan Now" always uses your true physical GPS coordinates.
  */
 class StabilizationAndLocationTracker(
     private val context: Context,
-    private val stabilizationDurationMs: Long = 1800L,
+    private val stabilizationDurationMs: Long = 1700L,
     private val onStateUpdate: (
         lat: Double,
         lon: Double,
@@ -35,13 +35,21 @@ class StabilizationAndLocationTracker(
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
-    // Default coordinates (3492 Cowper Ct, Palo Alto, CA) until live GPS fix arrives
+    // Hardware GPS coordinates (never overwritten by test presets!)
+    var realGpsLat: Double = 37.4184
+        private set
+    var realGpsLon: Double = -122.1162
+        private set
+    var hasRealGpsFix: Boolean = false
+        private set
+
+    // Currently displayed coordinates (either realGps or temporary preset)
     var currentLat: Double = 37.4184
         private set
     var currentLon: Double = -122.1162
         private set
-    var hasRealGpsFix: Boolean = false
-        private set
+    private var isViewingPresetLocation: Boolean = false
+
     var currentHeadingDeg: Float = 45f
         private set
 
@@ -54,13 +62,13 @@ class StabilizationAndLocationTracker(
     private var steadyStartTimestampMs = 0L
     private var isLockedOnTarget = false
     private var lockedHeadingDeg = 0f
+    private var hasLocationPermissionGranted = false
 
-    // Thresholds: how much angular / linear motion is allowed while still counting as "steady"
     private val motionThreshold = 0.85f
-    private val unlockHeadingDeltaDeg = 16f
 
     @SuppressLint("MissingPermission")
     fun start(hasLocationPermission: Boolean) {
+        hasLocationPermissionGranted = hasLocationPermission
         if (!isLockedOnTarget) {
             steadyStartTimestampMs = System.currentTimeMillis()
         }
@@ -76,6 +84,7 @@ class StabilizationAndLocationTracker(
         }
 
         if (hasLocationPermission) {
+            refreshHardwareGpsFromProviders()
             try {
                 val providers = listOf(
                     LocationManager.GPS_PROVIDER,
@@ -84,18 +93,42 @@ class StabilizationAndLocationTracker(
                 )
                 for (provider in providers) {
                     if (locationManager.isProviderEnabled(provider)) {
-                        locationManager.requestLocationUpdates(provider, 2000L, 2f, this)
-                        val lastKnown = locationManager.getLastKnownLocation(provider)
-                        if (lastKnown != null) {
-                            currentLat = lastKnown.latitude
-                            currentLon = lastKnown.longitude
-                            hasRealGpsFix = true
-                        }
+                        locationManager.requestLocationUpdates(provider, 1500L, 1f, this)
                     }
                 }
             } catch (_: SecurityException) {
-                // Handled gracefully if permission was revoked
             }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun refreshHardwareGpsFromProviders() {
+        if (!hasLocationPermissionGranted) return
+        try {
+            val providers = listOf(
+                LocationManager.GPS_PROVIDER,
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER
+            )
+            var bestLocation: Location? = null
+            for (provider in providers) {
+                if (locationManager.isProviderEnabled(provider)) {
+                    val loc = locationManager.getLastKnownLocation(provider) ?: continue
+                    if (bestLocation == null || loc.time > bestLocation.time) {
+                        bestLocation = loc
+                    }
+                }
+            }
+            if (bestLocation != null) {
+                realGpsLat = bestLocation.latitude
+                realGpsLon = bestLocation.longitude
+                hasRealGpsFix = true
+                if (!isViewingPresetLocation) {
+                    currentLat = realGpsLat
+                    currentLon = realGpsLon
+                }
+            }
+        } catch (_: SecurityException) {
         }
     }
 
@@ -108,17 +141,15 @@ class StabilizationAndLocationTracker(
     }
 
     /**
-     * Forces an immediate re-scan / re-stabilization cycle (or locks immediately if [immediate] is true).
+     * Triggered when the user taps "Scan Now", "Scan Next House", or cycles the target distance.
+     * Always restores the phone's true hardware GPS coordinates (clearing any test preset).
      */
-    fun triggerManualOrPresetScan(
-        overrideLat: Double? = null,
-        overrideLon: Double? = null,
-        immediate: Boolean = true
-    ) {
-        if (overrideLat != null && overrideLon != null) {
-            currentLat = overrideLat
-            currentLon = overrideLon
-        }
+    fun triggerRealGpsScan(immediate: Boolean = true) {
+        isViewingPresetLocation = false
+        refreshHardwareGpsFromProviders()
+        currentLat = realGpsLat
+        currentLon = realGpsLon
+
         if (immediate) {
             isLockedOnTarget = true
             lockedHeadingDeg = currentHeadingDeg
@@ -138,6 +169,28 @@ class StabilizationAndLocationTracker(
         }
     }
 
+    /**
+     * Triggered only when the user explicitly taps one of the indoor "Test Locations" chips.
+     * Does NOT overwrite [realGpsLat] or [realGpsLon].
+     */
+    fun triggerPresetScan(presetLat: Double, presetLon: Double) {
+        isViewingPresetLocation = true
+        currentLat = presetLat
+        currentLon = presetLon
+        isLockedOnTarget = true
+        lockedHeadingDeg = currentHeadingDeg
+        onStateUpdate(
+            currentLat,
+            currentLon,
+            false,
+            currentHeadingDeg,
+            1.0f,
+            true,
+            true
+        )
+        onStabilizedLock(presetLat, presetLon, currentHeadingDeg)
+    }
+
     override fun onSensorChanged(event: SensorEvent) {
         val now = System.currentTimeMillis()
 
@@ -149,7 +202,6 @@ class StabilizationAndLocationTracker(
                 gravity[2] = alpha * gravity[2] + (1 - alpha) * event.values[2]
                 hasGravity = true
 
-                // Linear acceleration (shake / movement detection)
                 val lx = event.values[0] - gravity[0]
                 val ly = event.values[1] - gravity[1]
                 val lz = event.values[2] - gravity[2]
@@ -170,7 +222,6 @@ class StabilizationAndLocationTracker(
                 val wz = event.values[2]
                 val rotRate = sqrt(wx * wx + wy * wy + wz * wz)
                 if (rotRate > 0.55f) {
-                    // Phone is actively panning across the street
                     lastLinearAccelMagnitude = motionThreshold + rotRate
                 }
             }
@@ -183,7 +234,6 @@ class StabilizationAndLocationTracker(
                 val orientation = FloatArray(3)
                 SensorManager.getOrientation(r, orientation)
                 val azimuthDeg = ((Math.toDegrees(orientation[0].toDouble()).toFloat() + 360f) % 360f)
-                // Smooth compass heading
                 val delta = ((azimuthDeg - currentHeadingDeg + 540f) % 360f) - 180f
                 currentHeadingDeg = (currentHeadingDeg + 0.15f * delta + 360f) % 360f
             }
@@ -193,11 +243,10 @@ class StabilizationAndLocationTracker(
 
         if (isLockedOnTarget) {
             // Stay locked on the current property until the user explicitly taps "Scan Now"
-            // so the user can lower or move the phone comfortably while reading the report.
             onStateUpdate(
                 currentLat,
                 currentLon,
-                hasRealGpsFix,
+                hasRealGpsFix && !isViewingPresetLocation,
                 currentHeadingDeg,
                 1.0f,
                 true,
@@ -207,12 +256,11 @@ class StabilizationAndLocationTracker(
         }
 
         if (!isSteady) {
-            // Reset stabilization timer when user is moving the camera
             steadyStartTimestampMs = now
             onStateUpdate(
                 currentLat,
                 currentLon,
-                hasRealGpsFix,
+                hasRealGpsFix && !isViewingPresetLocation,
                 currentHeadingDeg,
                 0.08f,
                 false,
@@ -231,7 +279,7 @@ class StabilizationAndLocationTracker(
                 onStateUpdate(
                     currentLat,
                     currentLon,
-                    hasRealGpsFix,
+                    hasRealGpsFix && !isViewingPresetLocation,
                     currentHeadingDeg,
                     1.0f,
                     true,
@@ -242,7 +290,7 @@ class StabilizationAndLocationTracker(
                 onStateUpdate(
                     currentLat,
                     currentLon,
-                    hasRealGpsFix,
+                    hasRealGpsFix && !isViewingPresetLocation,
                     currentHeadingDeg,
                     progress,
                     true,
@@ -255,9 +303,13 @@ class StabilizationAndLocationTracker(
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onLocationChanged(location: Location) {
-        currentLat = location.latitude
-        currentLon = location.longitude
+        realGpsLat = location.latitude
+        realGpsLon = location.longitude
         hasRealGpsFix = true
+        if (!isViewingPresetLocation) {
+            currentLat = realGpsLat
+            currentLon = realGpsLon
+        }
     }
 
     @Deprecated("Deprecated in Java")

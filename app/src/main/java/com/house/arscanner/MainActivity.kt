@@ -113,10 +113,9 @@ class MainActivity : ComponentActivity() {
 
         bindPresetLocationCallback { presetLabel, presetLat, presetLon ->
             pendingPresetLabel = presetLabel
-            tracker.triggerManualOrPresetScan(
-                overrideLat = presetLat,
-                overrideLon = presetLon,
-                immediate = true
+            tracker.triggerPresetScan(
+                presetLat = presetLat,
+                presetLon = presetLon
             )
         }
 
@@ -183,12 +182,14 @@ class MainActivity : ComponentActivity() {
                                     24 -> 40
                                     else -> 15
                                 }
-                                tracker.triggerManualOrPresetScan(immediate = true)
+                                pendingPresetLabel = null
+                                tracker.triggerRealGpsScan(immediate = true)
                             },
                             onRescanClick = {
                                 isDetailsExpanded = false
                                 currentValuation = null
-                                tracker.triggerManualOrPresetScan(immediate = true)
+                                pendingPresetLabel = null
+                                tracker.triggerRealGpsScan(immediate = true)
                             },
                             modifier = Modifier.align(Alignment.TopCenter)
                         )
@@ -247,7 +248,8 @@ class MainActivity : ComponentActivity() {
                             onLockNewHouse = {
                                 isDetailsExpanded = false
                                 currentValuation = null
-                                tracker.triggerManualOrPresetScan(immediate = false)
+                                pendingPresetLabel = null
+                                tracker.triggerRealGpsScan(immediate = false)
                             },
                             modifier = Modifier.align(Alignment.BottomCenter)
                         )

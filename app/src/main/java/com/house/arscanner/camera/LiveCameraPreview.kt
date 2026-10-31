@@ -2,6 +2,7 @@ package com.house.arscanner.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -22,11 +23,36 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import java.lang.ref.WeakReference
+
+/**
+ * Provides thread-safe access to capture the current live camera viewfinder frame
+ * when the user locks onto a house so we can run on-device OCR (house numbers / street signs)
+ * and visual target analysis.
+ */
+object LiveCameraFrameHolder {
+    private var textureViewRef: WeakReference<TextureView>? = null
+
+    fun attachTextureView(view: TextureView) {
+        textureViewRef = WeakReference(view)
+    }
+
+    fun captureCurrentFrame(): Bitmap? {
+        return try {
+            val tv = textureViewRef?.get() ?: return null
+            if (!tv.isAvailable || tv.width <= 0 || tv.height <= 0) return null
+            // Capture downscaled 720p-ish bitmap for fast ML Kit OCR
+            val targetW = (tv.width / 2).coerceIn(360, 960)
+            val targetH = (tv.height / 2).coerceIn(480, 1280)
+            tv.getBitmap(targetW, targetH)
+        } catch (_: Exception) {
+            null
+        }
+    }
+}
 
 /**
  * Full-screen live back-camera preview built directly on Android's native Camera2 API.
- * Gracefully falls back to an atmospheric architectural viewfinder backdrop if running
- * on an emulator without a virtual camera.
  */
 @Composable
 fun LiveCameraPreview(
@@ -64,12 +90,14 @@ fun LiveCameraPreview(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
+                LiveCameraFrameHolder.attachTextureView(this)
                 surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                     override fun onSurfaceTextureAvailable(
                         surface: SurfaceTexture,
                         width: Int,
                         height: Int
                     ) {
+                        LiveCameraFrameHolder.attachTextureView(this@apply)
                         controller.openBackCamera(surface)
                     }
 

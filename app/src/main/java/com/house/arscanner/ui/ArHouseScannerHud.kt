@@ -564,6 +564,15 @@ fun BottomPropertyInsightSheet(
                                     fontSize = 10.sp
                                 )
                             }
+                            if (!prop.cameraDetectionNote.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = prop.cameraDetectionNote,
+                                    color = CyanAccent,
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = prop.streetAddress,
@@ -657,6 +666,51 @@ fun BottomPropertyInsightSheet(
                                 .clickable { onToggleExpand() }
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         )
+                    }
+
+                    // 1-Tap Neighbor House Switcher (if GPS was slightly off by 1 house on the block)
+                    if (prop.nearbyCandidateAddresses.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Nearby on Block:",
+                                color = TextMuted,
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            prop.nearbyCandidateAddresses.forEach { neighborLabel ->
+                                val isCurrent = neighborLabel.startsWith(prop.streetAddress, ignoreCase = true)
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(
+                                            if (isCurrent) EmeraldAccent.copy(alpha = 0.22f) else SurfaceSlate
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (isCurrent) EmeraldAccent else Color(0x40FFFFFF),
+                                            RoundedCornerShape(50)
+                                        )
+                                        .clickable {
+                                            onPresetSelected(neighborLabel, prop.latitude, prop.longitude)
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Text(
+                                        text = neighborLabel.substringBefore(","),
+                                        color = if (isCurrent) EmeraldAccent else TextWhite,
+                                        fontSize = 9.5.sp,
+                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     // Expanded Detailed Sections: Schools, Sale History, Taxes, and Live Zillow/Redfin Links
