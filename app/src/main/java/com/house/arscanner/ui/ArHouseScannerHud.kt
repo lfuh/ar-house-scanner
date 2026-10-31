@@ -196,50 +196,10 @@ fun TopTelemetryHudBar(
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // Preset Property Switcher (helpful when testing indoors or comparing houses)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Test Locations:",
-                color = TextMuted,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(DarkGlass)
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
-            )
-            PropertyValuationEngine.presetLocations.forEach { (label, pLat, pLon) ->
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(DarkGlass)
-                        .border(1.dp, Color(0x40FFFFFF), RoundedCornerShape(50))
-                        .clickable {
-                            onPresetSelected(label, pLat, pLon)
-                        }
-                        .padding(horizontal = 9.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = label,
-                        color = TextWhite,
-                        fontSize = 10.sp
-                    )
-                }
-            }
-        }
     }
 }
 
-// Callback holder to keep TopTelemetryHudBar signature clean
+// Callback holder for 1-tap Neighbor on Block selection
 private var onPresetSelected: (String, Double, Double) -> Unit = { _, _, _ -> }
 
 fun bindPresetLocationCallback(callback: (String, Double, Double) -> Unit) {
@@ -270,7 +230,7 @@ fun ArHouseTargetOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(top = 92.dp, bottom = 275.dp),
+            .padding(top = 64.dp, bottom = 275.dp),
         contentAlignment = Alignment.Center
     ) {
         // 1. Viewfinder Reticle & Stabilization Ring (centered in visible camera viewport)
