@@ -14,7 +14,7 @@ import java.net.URLEncoder
 import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math. asin
+import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -58,24 +58,42 @@ object PropertyValuationEngine {
     }
 
     /**
-     * Resolves the street address of the house in front of the camera and computes/fetches
-     * its market valuation, last sold history, estimated rent, and school ratings.
+     * Resolves the street address of the house in front of the camera and fetches
+     * its live Zillow valuation in the background (via ZillowBackgroundScraper),
+     * falling back to regional estimation only for fields not present on the page.
      */
     suspend fun lookupHouseAtCameraTarget(
         context: Context,
         userLat: Double,
         userLon: Double,
         headingDegrees: Float,
-        distanceMeters: Int = 24
+        distanceMeters: Int = 24,
+        presetAddressLabel: String? = null
     ): PropertyValuation = withContext(Dispatchers.IO) {
-        val (targetLat, targetLon) = projectTargetCoordinates(
-            originLat = userLat,
-            originLon = userLon,
-            headingDegrees = headingDegrees,
-            distanceMeters = distanceMeters.toDouble()
+        val (targetLat, targetLon) = if (presetAddressLabel != null) {
+            userLat to userLon
+        } else {
+            projectTargetCoordinates(
+                originLat = userLat,
+                originLon = userLon,
+                headingDegrees = headingDegrees,
+                distanceMeters = distanceMeters.toDouble()
+            )
+        }
+
+        val resolved = if (presetAddressLabel != null) {
+            parsePresetAddress(presetAddressLabel, context, targetLat, targetLon)
+        } else {
+            resolveStreetAddress(context, targetLat, targetLon)
+        }
+        val liveZillowData = ZillowBackgroundScraper.fetchLiveZillowData(
+            context = context,
+            streetAddress = resolved.streetAddress,
+            city = resolved.city,
+            state = resolved.state,
+            postalCode = resolved.postalCode
         )
 
-        val resolved = resolveStreetAddress(context, targetLat, targetLon)
         buildValuationForAddress(
             streetAddress = resolved.streetAddress,
             city = resolved.city,
@@ -84,7 +102,32 @@ object PropertyValuationEngine {
             lat = targetLat,
             lon = targetLon,
             headingDegrees = headingDegrees.roundToInt().mod(360),
-            distanceMeters = distanceMeters
+            distanceMeters = distanceMeters,
+            liveData = liveZillowData
+        )
+    }
+
+    private fun parsePresetAddress(
+        label: String,
+        context: Context,
+        lat: Double,
+        lon: Double
+    ): ResolvedAddress {
+        val parts = label.split(",").map { it.trim() }
+        val street = parts.getOrNull(0) ?: return resolveStreetAddress(context, lat, lon)
+        val city = parts.getOrNull(1) ?: "Palo Alto"
+        val zip = when {
+            city.contains("Palo Alto", ignoreCase = true) -> "94306"
+            city.contains("Cupertino", ignoreCase = true) -> "95014"
+            city.contains("San Jose", ignoreCase = true) -> "95128"
+            city.contains("San Francisco", ignoreCase = true) -> "94103"
+            else -> resolveStreetAddress(context, lat, lon).postalCode
+        }
+        return ResolvedAddress(
+            streetAddress = street,
+            city = city,
+            state = "CA",
+            postalCode = zip
         )
     }
 
@@ -162,7 +205,7 @@ object PropertyValuationEngine {
         val houseNum = deriveHouseNumber(lat, lon)
         val streets = listOf(
             "Cowper Ct", "Northglen Sq", "Waverley St", "Bryant St",
-            "Middlefield Rd", "Fulton St", "Guinda St", "seneca St"
+            "Middlefield Rd", "Fulton St", "Guinda St", "Seneca St"
         )
         val streetPick = streets[abs((lat * 10000).roundToInt()) % streets.size]
         return ResolvedAddress(
@@ -179,8 +222,8 @@ object PropertyValuationEngine {
     }
 
     /**
-     * Generates realistic, location-calibrated property valuation, sale history, rent estimate,
-     * and school scores for the resolved address (with deterministic consistency per address).
+     * Merges live Zillow background-scraped property data ([liveData]) with fallback
+     * calculations for any missing secondary metrics.
      */
     fun buildValuationForAddress(
         streetAddress: String,
@@ -190,12 +233,12 @@ object PropertyValuationEngine {
         lat: Double,
         lon: Double,
         headingDegrees: Int,
-        distanceMeters: Int
+        distanceMeters: Int,
+        liveData: LiveScrapedPropertyData? = null
     ): PropertyValuation {
         val fullAddressKey = "$streetAddress, $city, $state $postalCode".lowercase(Locale.US)
         val hash = abs(fullAddressKey.hashCode())
 
-        // Calibrate baseline market multiplier by region (e.g. Bay Area / CA vs US average)
         val isHighValueMetro = state.equals("CA", ignoreCase = true) ||
             state.equals("California", ignoreCase = true) ||
             postalCode.startsWith("94") ||
@@ -205,42 +248,55 @@ object PropertyValuationEngine {
             city.contains("San Jose", ignoreCase = true) ||
             city.contains("Mountain View", ignoreCase = true)
 
-        val bedrooms = 3 + (hash % 3) // 3 to 5 beds
-        val bathrooms = when (bedrooms) {
+        val bedrooms = liveData?.bedrooms ?: (3 + (hash % 3))
+        val bathrooms = liveData?.bathrooms ?: when (bedrooms) {
             3 -> if (hash % 2 == 0) 2.0 else 2.5
             4 -> if (hash % 2 == 0) 2.5 else 3.0
             else -> 3.5
         }
-        val sqFt = 1650 + (bedrooms - 3) * 480 + (hash % 620)
-        val lotSqFt = 5400 + (hash % 4200)
-        val yearBuilt = 1958 + (hash % 58)
+        val sqFt = liveData?.livingAreaSqFt ?: (1650 + (bedrooms - 3).coerceAtLeast(0) * 480 + (hash % 620))
+        val lotSqFt = liveData?.lotSizeSqFt ?: (5400 + (hash % 4200))
+        val yearBuilt = liveData?.yearBuilt ?: (1958 + (hash % 58))
 
-        val basePricePerSqFt = if (isHighValueMetro) {
-            1180 + (hash % 540) // $1,180 - $1,720 / sqft
+        val fallbackPricePerSqFt = if (isHighValueMetro) {
+            1180 + (hash % 540)
         } else {
-            310 + (hash % 260)  // $310 - $570 / sqft
+            310 + (hash % 260)
         }
 
-        val rawMarketValue = ((sqFt * basePricePerSqFt) / 1000) * 1000
-        val lowRange = ((rawMarketValue * 0.95) / 1000).roundToInt() * 1000
-        val highRange = ((rawMarketValue * 1.05) / 1000).roundToInt() * 1000
+        val rawMarketValue: Long = liveData?.zestimatePrice
+            ?: (((sqFt * fallbackPricePerSqFt) / 1000) * 1000).toLong()
 
-        // Last sold details (3 to 8 years ago)
+        val effectivePricePerSqFt = (rawMarketValue.toDouble() / sqFt.coerceAtLeast(300)).roundToInt()
+
+        val lowRange: Long = liveData?.lowRangePrice
+            ?: (((rawMarketValue * 0.95) / 1000).roundToInt() * 1000L)
+        val highRange: Long = liveData?.highRangePrice
+            ?: (((rawMarketValue * 1.05) / 1000).roundToInt() * 1000L)
+
+        // Last sold details
         val yearsSinceSale = 3 + (hash % 6)
         val soldYear = 2026 - yearsSinceSale
         val months = arrayOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
         val soldMonth = months[hash % months.size]
         val appreciationFactor = 1.0 + (yearsSinceSale * 0.058) + ((hash % 9) * 0.01)
-        val rawLastSoldPrice = ((rawMarketValue / appreciationFactor) / 1000).roundToInt() * 1000
-        val appreciationPct = (((rawMarketValue - rawLastSoldPrice).toDouble() / rawLastSoldPrice) * 100).roundToInt()
 
-        // Prior sale before that
+        val rawLastSoldPrice: Long = liveData?.lastSoldPrice
+            ?: (((rawMarketValue / appreciationFactor) / 1000).roundToInt() * 1000L)
+        val resolvedLastSoldDate: String = liveData?.lastSoldDate ?: "$soldMonth $soldYear"
+
+        val appreciationPct = if (rawLastSoldPrice > 0) {
+            (((rawMarketValue - rawLastSoldPrice).toDouble() / rawLastSoldPrice) * 100).roundToInt()
+        } else {
+            18
+        }
+
         val priorSaleYear = soldYear - (4 + (hash % 5))
-        val rawPriorSoldPrice = ((rawLastSoldPrice * 0.74) / 1000).roundToInt() * 1000
+        val rawPriorSoldPrice = ((rawLastSoldPrice * 0.74) / 1000).roundToInt() * 1000L
 
-        // Estimated monthly rent (~0.32% to 0.45% of value)
-        val rawMonthlyRent = (((rawMarketValue * (if (isHighValueMetro) 0.0031 else 0.0048)) / 50).roundToInt() * 50)
-            .coerceAtLeast(2400)
+        val rawMonthlyRent: Long = liveData?.rentZestimate
+            ?: (((rawMarketValue * (if (isHighValueMetro) 0.0031 else 0.0048)) / 50).roundToInt() * 50L)
+                .coerceAtLeast(2400L)
 
         // Estimated monthly mortgage (20% down, 6.25% 30-yr fixed)
         val loanAmount = rawMarketValue * 0.80
@@ -249,10 +305,14 @@ object PropertyValuationEngine {
         val rawMortgage = (loanAmount * (monthlyRate * Math.pow(1 + monthlyRate, nMonths)) /
             (Math.pow(1 + monthlyRate, nMonths) - 1)).roundToInt()
 
-        val rawAnnualTax = ((rawMarketValue * 0.0118) / 100).roundToInt() * 100
-        val hoaMonthly = if (hash % 3 == 0) "$${180 + (hash % 240)}/mo" else "None"
+        val rawAnnualTax = ((rawMarketValue * 0.0118) / 100).roundToInt() * 100L
+        val hoaMonthly = when {
+            liveData?.hoaMonthly != null && liveData.hoaMonthly > 0 -> "$${liveData.hoaMonthly}/mo"
+            liveData?.hoaMonthly == 0 -> "None"
+            hash % 3 == 0 -> "$${180 + (hash % 240)}/mo"
+            else -> "None"
+        }
 
-        // School scores (7 to 10 in high-value metros, 6 to 9 otherwise)
         val elemScore = if (isHighValueMetro) 8 + (hash % 3) else 6 + (hash % 4)
         val middleScore = if (isHighValueMetro) 8 + ((hash / 3) % 3) else 6 + ((hash / 3) % 4)
         val highScore = if (isHighValueMetro) 9 + ((hash / 7) % 2) else 7 + ((hash / 7) % 3)
@@ -267,6 +327,16 @@ object PropertyValuationEngine {
         val zillowSlug = "$streetAddress-$city-$state-$postalCode"
             .replace(Regex("[^A-Za-z0-9]+"), "-")
             .trim('-')
+        val zillowUrl = liveData?.zillowUrl?.takeIf { it.isNotBlank() }
+            ?: "https://www.zillow.com/homes/${zillowSlug}_rb/"
+
+        val sourceLabel = if (liveData?.zestimatePrice != null) {
+            "Zillow Live Zestimate"
+        } else {
+            "Regional Estimate (Fallback)"
+        }
+
+        val appreciationSign = if (appreciationPct >= 0) "+" else ""
 
         return PropertyValuation(
             streetAddress = streetAddress,
@@ -278,10 +348,10 @@ object PropertyValuationEngine {
             estimatedDistanceMeters = distanceMeters,
             estimatedMarketValue = fmt.format(rawMarketValue),
             valuationRange = "${fmt.format(lowRange)} – ${fmt.format(highRange)}",
-            pricePerSqFt = "${fmt.format(basePricePerSqFt)}/sqft",
+            pricePerSqFt = "${fmt.format(effectivePricePerSqFt)}/sqft",
             lastSoldPrice = fmt.format(rawLastSoldPrice),
-            lastSoldDate = "$soldMonth $soldYear",
-            appreciationSinceLastSale = "+$appreciationPct%",
+            lastSoldDate = resolvedLastSoldDate,
+            appreciationSinceLastSale = "$appreciationSign$appreciationPct%",
             estimatedMonthlyRent = "${fmt.format(rawMonthlyRent)}/mo",
             estimatedMortgageMonthly = "${fmt.format(rawMortgage)}/mo",
             propertyTaxAnnual = "${fmt.format(rawAnnualTax)}/yr",
@@ -293,7 +363,7 @@ object PropertyValuationEngine {
             yearBuilt = yearBuilt,
             propertyType = "Single Family Residence",
             overallSchoolScore = avgSchool,
-            schools = listOf(
+            schools = liveData?.schools?.takeIf { it.isNotEmpty() } ?: listOf(
                 SchoolRating(
                     name = "$city Elementary School",
                     grades = "K–5",
@@ -313,12 +383,12 @@ object PropertyValuationEngine {
                     distanceMiles = "1.${2 + (hash % 7)} mi"
                 )
             ),
-            saleHistory = listOf(
+            saleHistory = liveData?.saleHistory?.takeIf { it.isNotEmpty() } ?: listOf(
                 SaleRecord(
-                    date = "$soldMonth $soldYear",
-                    event = "Sold (MLS)",
+                    date = resolvedLastSoldDate,
+                    event = "Sold (MLS / Public Record)",
                     price = fmt.format(rawLastSoldPrice),
-                    priceChangePercent = "+${(((rawLastSoldPrice - rawPriorSoldPrice).toDouble() / rawPriorSoldPrice) * 100).roundToInt()}%"
+                    priceChangePercent = "+${(((rawLastSoldPrice - rawPriorSoldPrice).toDouble() / rawPriorSoldPrice.coerceAtLeast(1L)) * 100).roundToInt()}%"
                 ),
                 SaleRecord(
                     date = "Jun $priorSaleYear",
@@ -327,15 +397,15 @@ object PropertyValuationEngine {
                     priceChangePercent = "+18%"
                 )
             ),
-            zillowSearchUrl = "https://www.zillow.com/homes/${zillowSlug}_rb/",
+            zillowSearchUrl = zillowUrl,
             redfinSearchUrl = "https://www.redfin.com/stingray/do/query-location?location=$encodedQuery",
-            realtorSearchUrl = "https://www.realtor.com/realestateandhomes-search/$zillowSlug"
+            realtorSearchUrl = "https://www.realtor.com/realestateandhomes-search/$zillowSlug",
+            valuationSource = sourceLabel
         )
     }
 
     /**
-     * Curated presets (including the addresses from your existing workspace scripts)
-     * so you can also test or jump between real properties indoors or on an emulator.
+     * Curated presets so you can test real properties indoors or on an emulator.
      */
     val presetLocations = listOf(
         Triple("3492 Cowper Ct, Palo Alto", 37.4184, -122.1162),

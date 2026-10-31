@@ -43,5 +43,6 @@ data class PropertyValuation(
     val saleHistory: List<SaleRecord>,
     val zillowSearchUrl: String,
     val redfinSearchUrl: String,
-    val realtorSearchUrl: String
+    val realtorSearchUrl: String,
+    val valuationSource: String = "Zillow Live"
 )

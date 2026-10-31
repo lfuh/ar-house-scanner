@@ -209,7 +209,7 @@ fun TopTelemetryHudBar(
                         .background(DarkGlass)
                         .border(1.dp, Color(0x40FFFFFF), RoundedCornerShape(50))
                         .clickable {
-                            onPresetSelected(pLat, pLon)
+                            onPresetSelected(label, pLat, pLon)
                         }
                         .padding(horizontal = 9.dp, vertical = 3.dp)
                 ) {
@@ -225,9 +225,9 @@ fun TopTelemetryHudBar(
 }
 
 // Callback holder to keep TopTelemetryHudBar signature clean
-private var onPresetSelected: (Double, Double) -> Unit = { _, _ -> }
+private var onPresetSelected: (String, Double, Double) -> Unit = { _, _, _ -> }
 
-fun bindPresetLocationCallback(callback: (Double, Double) -> Unit) {
+fun bindPresetLocationCallback(callback: (String, Double, Double) -> Unit) {
     onPresetSelected = callback
 }
 
@@ -324,7 +324,7 @@ fun ArHouseTargetOverlay(
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                 ) {
                     val statusText = when {
-                        isLoadingLookup -> "Looking up property value..."
+                        isLoadingLookup -> "Fetching live Zillow Zestimate..."
                         !isSteady -> "Point at house & hold steady..."
                         else -> "Stabilizing ${(animatedProgress * 100).roundToInt()}%..."
                     }
@@ -367,7 +367,7 @@ fun ArHouseTargetOverlay(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            // Address pill
+                            // Address pill + Live Source Indicator
                             Text(
                                 text = "📍 ${prop.streetAddress} • ${prop.cityStateZip}",
                                 color = CyanAccent,
@@ -375,6 +375,12 @@ fun ArHouseTargetOverlay(
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "⚡ ${prop.valuationSource}",
+                                color = EmeraldAccent,
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.SemiBold
                             )
                             Spacer(modifier = Modifier.height(2.dp))
 
@@ -569,7 +575,7 @@ fun BottomPropertyInsightSheet(
 
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
-                                text = "EST. MARKET VALUE",
+                                text = prop.valuationSource.uppercase(),
                                 color = CyanAccent,
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.ExtraBold

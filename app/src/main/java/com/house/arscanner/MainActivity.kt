@@ -74,6 +74,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var tracker: StabilizationAndLocationTracker
     private var activeLookupJob: Job? = null
 
+    private var pendingPresetLabel: String? = null
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
@@ -103,11 +105,14 @@ class MainActivity : ComponentActivity() {
                 isLocked = locked
             },
             onStabilizedLock = { lat, lon, heading ->
-                performHouseLookup(lat, lon, heading, targetDistanceMeters)
+                val preset = pendingPresetLabel
+                pendingPresetLabel = null
+                performHouseLookup(lat, lon, heading, targetDistanceMeters, preset)
             }
         )
 
-        bindPresetLocationCallback { presetLat, presetLon ->
+        bindPresetLocationCallback { presetLabel, presetLat, presetLon ->
+            pendingPresetLabel = presetLabel
             tracker.triggerManualOrPresetScan(
                 overrideLat = presetLat,
                 overrideLon = presetLon,
@@ -253,7 +258,8 @@ class MainActivity : ComponentActivity() {
         lat: Double,
         lon: Double,
         headingDeg: Float,
-        distanceMeters: Int
+        distanceMeters: Int,
+        presetAddressLabel: String? = null
     ) {
         activeLookupJob?.cancel()
         activeLookupJob = lifecycleScope.launch {
@@ -263,7 +269,8 @@ class MainActivity : ComponentActivity() {
                 userLat = lat,
                 userLon = lon,
                 headingDegrees = headingDeg,
-                distanceMeters = distanceMeters
+                distanceMeters = distanceMeters,
+                presetAddressLabel = presetAddressLabel
             )
             currentValuation = result
             isLoadingLookup = false
