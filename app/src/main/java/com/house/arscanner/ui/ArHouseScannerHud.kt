@@ -104,47 +104,58 @@ fun TopTelemetryHudBar(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             // Left: GPS Status & Coordinates
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Box(
                     modifier = Modifier
-                        .size(9.dp)
+                        .size(8.dp)
                         .clip(CircleShape)
                         .background(if (hasRealGps) EmeraldAccent else GoldAccent)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Column {
                     Text(
-                        text = if (hasRealGps) "LIVE GPS + COMPASS" else "GPS DEMO / INDOOR MODE",
+                        text = if (hasRealGps) "LIVE GPS + COMPASS" else "PRESET / INDOOR",
                         color = if (hasRealGps) EmeraldAccent else GoldAccent,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 0.6.sp
+                        letterSpacing = 0.4.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = String.format("%.5f, %.5f", lat, lon),
                         color = TextWhite,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
-            // Middle: Compass Heading & Target Distance pill
+            // Right: Compass Heading, Target Distance, and Scan Now pills (never wrap vertically)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .background(SurfaceSlate)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(horizontal = 7.dp, vertical = 5.dp)
                 ) {
                     Text(
                         text = "🧭 ${headingDeg.roundToInt()}° $cardinal",
                         color = CyanAccent,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
 
@@ -154,13 +165,15 @@ fun TopTelemetryHudBar(
                         .background(SurfaceSlate)
                         .border(1.dp, CyanAccent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
                         .clickable { onCycleDistance() }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(horizontal = 7.dp, vertical = 5.dp)
                 ) {
                     Text(
                         text = "🎯 ${targetDistanceMeters}m",
                         color = TextWhite,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
 
@@ -170,13 +183,15 @@ fun TopTelemetryHudBar(
                         .background(CyanAccent.copy(alpha = 0.2f))
                         .border(1.dp, CyanAccent, RoundedCornerShape(8.dp))
                         .clickable { onRescanClick() }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(horizontal = 9.dp, vertical = 5.dp)
                 ) {
                     Text(
                         text = "Scan Now",
                         color = CyanAccent,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }
@@ -253,12 +268,14 @@ fun ArHouseTargetOverlay(
     )
 
     Box(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .padding(top = 92.dp, bottom = 275.dp),
         contentAlignment = Alignment.Center
     ) {
-        // 1. Viewfinder Reticle & Stabilization Ring
+        // 1. Viewfinder Reticle & Stabilization Ring (centered in visible camera viewport)
         Box(
-            modifier = Modifier.size(190.dp),
+            modifier = Modifier.size(164.dp),
             contentAlignment = Alignment.Center
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
@@ -270,8 +287,8 @@ fun ArHouseTargetOverlay(
                 }
 
                 // Corner framing brackets
-                val bracketLen = 26.dp.toPx()
-                val pad = 10.dp.toPx()
+                val bracketLen = 24.dp.toPx()
+                val pad = 8.dp.toPx()
                 val w = size.width
                 val h = size.height
 
@@ -289,7 +306,7 @@ fun ArHouseTargetOverlay(
                 drawLine(ringColor, Offset(w - pad, h - pad), Offset(w - pad, h - pad - bracketLen), strokeW)
 
                 // Inner circular stabilization progress arc
-                val arcRadius = (size.minDimension / 2f) - 24.dp.toPx()
+                val arcRadius = (size.minDimension / 2f) - 22.dp.toPx()
                 drawCircle(
                     color = Color.White.copy(alpha = 0.15f),
                     radius = arcRadius,
@@ -318,7 +335,7 @@ fun ArHouseTargetOverlay(
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 16.dp)
+                        .padding(bottom = 12.dp)
                         .clip(RoundedCornerShape(50))
                         .background(DarkGlass)
                         .padding(horizontal = 12.dp, vertical = 4.dp)
@@ -332,20 +349,21 @@ fun ArHouseTargetOverlay(
                         text = statusText,
                         color = if (isSteady) CyanAccent else GoldAccent,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
                 }
             }
         }
 
-        // 2. Floating AR House Valuation Callout Pin (Appears over the house once stabilized!)
+        // 2. Compact Floating AR House Price Pin (Anchored cleanly inside the camera viewport, never overlaps bottom sheet!)
         AnimatedVisibility(
             visible = isLocked && property != null && !isLoadingLookup,
             enter = fadeIn() + scaleIn(initialScale = 0.88f),
             exit = fadeOut(),
             modifier = Modifier
-                .align(Alignment.Center)
-                .padding(bottom = 140.dp)
+                .align(Alignment.TopCenter)
+                .padding(top = 8.dp, start = 16.dp, end = 16.dp)
         ) {
             property?.let { prop ->
                 Column(
@@ -354,20 +372,19 @@ fun ArHouseTargetOverlay(
                 ) {
                     Surface(
                         color = CardGlass,
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
-                            .shadow(16.dp, RoundedCornerShape(16.dp))
+                            .shadow(12.dp, RoundedCornerShape(14.dp))
                             .border(
                                 width = 1.5.dp,
                                 brush = Brush.horizontalGradient(listOf(EmeraldAccent, CyanAccent)),
-                                shape = RoundedCornerShape(16.dp)
+                                shape = RoundedCornerShape(14.dp)
                             )
                     ) {
                         Column(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            // Address pill + Live Source Indicator
                             Text(
                                 text = "📍 ${prop.streetAddress} • ${prop.cityStateZip}",
                                 color = CyanAccent,
@@ -376,23 +393,35 @@ fun ArHouseTargetOverlay(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Text(
-                                text = "⚡ ${prop.valuationSource}",
-                                color = EmeraldAccent,
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
                             Spacer(modifier = Modifier.height(2.dp))
 
-                            // Prominent Market Value
-                            Text(
-                                text = prop.estimatedMarketValue,
-                                color = TextWhite,
-                                fontSize = 26.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = prop.estimatedMarketValue,
+                                    color = TextWhite,
+                                    fontSize = 22.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    maxLines = 1
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(EmeraldAccent.copy(alpha = 0.18f))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "⚡ ${prop.valuationSource}",
+                                        color = EmeraldAccent,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
 
-                            // Bed / Bath / SqFt & Price/SqFt
                             val bathText = if (prop.bathrooms % 1.0 == 0.0) {
                                 prop.bathrooms.toInt().toString()
                             } else {
@@ -401,46 +430,16 @@ fun ArHouseTargetOverlay(
                             Text(
                                 text = "${prop.bedrooms} bd • $bathText ba • ${prop.livingAreaSqFt} sqft (${prop.pricePerSqFt})",
                                 color = TextMuted,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            // Quick 3-metric badges inside floating AR tag: Last Sold, Est Rent, School Score
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                ArFloatingMetricPill(
-                                    label = "Last Sold",
-                                    value = "${prop.lastSoldPrice} (${prop.lastSoldDate})",
-                                    accent = GoldAccent
-                                )
-                                ArFloatingMetricPill(
-                                    label = "Est. Rent",
-                                    value = prop.estimatedMonthlyRent,
-                                    accent = EmeraldAccent
-                                )
-                                ArFloatingMetricPill(
-                                    label = "Schools",
-                                    value = "🎓 ${prop.overallSchoolScore}",
-                                    accent = CyanAccent
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Tap badge or card below for full property report ▾",
-                                color = EmeraldAccent,
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.SemiBold
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
 
                     // Downward pointer triangle connecting the AR badge to the house reticle
-                    Canvas(modifier = Modifier.size(width = 20.dp, height = 10.dp)) {
+                    Canvas(modifier = Modifier.size(width = 18.dp, height = 8.dp)) {
                         val path = Path().apply {
                             moveTo(0f, 0f)
                             lineTo(size.width, 0f)
@@ -542,7 +541,11 @@ fun BottomPropertyInsightSheet(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 8.dp)
+                        ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     modifier = Modifier
@@ -554,14 +557,16 @@ fun BottomPropertyInsightSheet(
                                         text = "LOCKED • ${prop.estimatedDistanceMeters}m ${prop.cardinalDirection}",
                                         color = EmeraldAccent,
                                         fontSize = 9.sp,
-                                        fontWeight = FontWeight.ExtraBold
+                                        fontWeight = FontWeight.ExtraBold,
+                                        maxLines = 1
                                     )
                                 }
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = "Built ${prop.yearBuilt}",
                                     color = TextMuted,
-                                    fontSize = 10.sp
+                                    fontSize = 10.sp,
+                                    maxLines = 1
                                 )
                             }
                             if (!prop.cameraDetectionNote.isNullOrBlank()) {
@@ -570,20 +575,26 @@ fun BottomPropertyInsightSheet(
                                     text = prop.cameraDetectionNote,
                                     color = CyanAccent,
                                     fontSize = 9.5.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = prop.streetAddress,
                                 color = TextWhite,
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.ExtraBold
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = prop.cityStateZip,
                                 color = TextMuted,
-                                fontSize = 12.sp
+                                fontSize = 11.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 

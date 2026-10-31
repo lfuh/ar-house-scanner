@@ -282,8 +282,11 @@ object ZillowBackgroundScraper {
             Regex(
                 """"lastSold"\s*:\s*\{\s*"soldPrice"\s*:\s*\{\s*"formattedPrice"\s*:\s*"[^"]+"\s*,\s*"price"\s*:\s*(\d+)[^}]*\}\s*,\s*"formattedSoldDate"\s*:\s*"([^"]+)""""
             ).find(rawJson)?.let { m ->
-                lastSoldPrice = m.groupValues.getOrNull(1)?.toLongOrNull()
-                lastSoldDate = m.groupValues.getOrNull(2)
+                val p = m.groupValues.getOrNull(1)?.toLongOrNull()
+                if (p != null && p >= 50_000L) {
+                    lastSoldPrice = p
+                    lastSoldDate = m.groupValues.getOrNull(2)
+                }
             }
 
             // 7. Full Price / Sale History events
@@ -294,7 +297,7 @@ object ZillowBackgroundScraper {
                 val dateStr = m.groupValues[1]
                 val eventName = m.groupValues[2]
                 val rawEventPrice = m.groupValues[3].toLongOrNull() ?: 0L
-                if (rawEventPrice > 10_000L && historyEvents.size < 5) {
+                if (rawEventPrice >= 50_000L && historyEvents.size < 5) {
                     historyEvents.add(dateStr to (eventName to rawEventPrice))
                 }
             }
@@ -450,8 +453,11 @@ object ZillowBackgroundScraper {
                 val price1 = m.groupValues.getOrNull(2)?.replace(",", "")?.toLongOrNull()
                 val price2 = m.groupValues.getOrNull(3)?.replace(",", "")?.toLongOrNull()
                 val date2 = m.groupValues.getOrNull(4)?.trim()?.takeIf { it.isNotBlank() }
-                lastSoldPrice = price1 ?: price2
-                lastSoldDate = date1 ?: date2
+                val candidateSold = (price1 ?: price2)?.takeIf { it >= 50_000L }
+                if (candidateSold != null) {
+                    lastSoldPrice = candidateSold
+                    lastSoldDate = date1 ?: date2
+                }
             }
 
             val zestimate = extractExplicitZestimateFromText(targetText)
