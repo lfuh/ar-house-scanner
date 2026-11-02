@@ -23,6 +23,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import java.lang.ref.WeakReference
 
 /**
@@ -76,9 +79,19 @@ fun LiveCameraPreview(
 
     val controller = remember { Camera2PreviewController(context) }
 
-    DisposableEffect(Unit) {
+    val lifecycleOwner = context as? LifecycleOwner
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> controller.pause()
+                Lifecycle.Event.ON_RESUME -> controller.resume()
+                else -> {}
+            }
+        }
+        lifecycleOwner?.lifecycle?.addObserver(observer)
         onDispose {
-            controller.closeCamera()
+            lifecycleOwner?.lifecycle?.removeObserver(observer)
+            controller.pause()
         }
     }
 
@@ -108,7 +121,7 @@ fun LiveCameraPreview(
                     ) {}
 
                     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                        controller.closeCamera()
+                        controller.surfaceDestroyed()
                         return true
                     }
 
@@ -122,9 +135,32 @@ fun LiveCameraPreview(
 private class Camera2PreviewController(private val context: Context) {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
+    private var surfaceTexture: SurfaceTexture? = null
+    private var isPaused = false
+
+    /** Re-opens the camera on the last known surface (after app resume / system camera disconnect). */
+    fun resume() {
+        isPaused = false
+        val st = surfaceTexture ?: return
+        if (cameraDevice == null) openBackCamera(st)
+    }
+
+    fun surfaceDestroyed() {
+        surfaceTexture = null
+        closeCamera()
+    }
+
+    fun pause() {
+        isPaused = true
+        closeCamera()
+    }
 
     @SuppressLint("MissingPermission")
     fun openBackCamera(surfaceTexture: SurfaceTexture) {
+        this.surfaceTexture = surfaceTexture
+        if (isPaused) return
+        // Always release any previous (possibly stale) camera before opening a new one
+        closeCamera()
         try {
             val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val backCameraId = manager.cameraIdList.firstOrNull { id ->
@@ -176,12 +212,16 @@ private class Camera2PreviewController(private val context: Context) {
 
                     override fun onDisconnected(camera: CameraDevice) {
                         camera.close()
-                        cameraDevice = null
+                        if (cameraDevice === camera) cameraDevice = null
+                        captureSession = null
+                        retryOpen()
                     }
 
                     override fun onError(camera: CameraDevice, error: Int) {
                         camera.close()
-                        cameraDevice = null
+                        if (cameraDevice === camera) cameraDevice = null
+                        captureSession = null
+                        retryOpen()
                     }
                 },
                 null
@@ -189,6 +229,13 @@ private class Camera2PreviewController(private val context: Context) {
         } catch (_: Exception) {
             // Ignore if emulator has no camera configured
         }
+    }
+
+    private fun retryOpen() {
+        if (isPaused) return
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (!isPaused && cameraDevice == null) resume()
+        }, 600L)
     }
 
     fun closeCamera() {

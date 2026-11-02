@@ -239,6 +239,11 @@ class MainActivity : ComponentActivity() {
                                 onOpenDetailsSheet = {
                                     isDetailsExpanded = !isDetailsExpanded
                                 },
+                                onShutterClick = {
+                                    isDetailsExpanded = false
+                                    pendingPresetLabel = null
+                                    tracker.triggerRealGpsScan(immediate = true)
+                                },
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxWidth()

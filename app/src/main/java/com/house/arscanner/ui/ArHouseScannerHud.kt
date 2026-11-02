@@ -196,6 +196,7 @@ fun TopTelemetryHudBar(
                 }
             }
         }
+
     }
 }
 
@@ -219,6 +220,7 @@ fun ArHouseTargetOverlay(
     isLoadingLookup: Boolean,
     property: PropertyValuation?,
     onOpenDetailsSheet: () -> Unit,
+    onShutterClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val animatedProgress by animateFloatAsState(
@@ -400,8 +402,7 @@ fun ArHouseTargetOverlay(
                 ) {
                     val statusText = when {
                         isLoadingLookup -> "Fetching live Zillow Zestimate..."
-                        !isSteady -> "Point at house & hold steady..."
-                        else -> "Stabilizing ${(animatedProgress * 100).roundToInt()}%..."
+                        else -> "Aim at house, then tap shutter"
                     }
                     Text(
                         text = statusText,
@@ -412,6 +413,21 @@ fun ArHouseTargetOverlay(
                     )
                 }
             }
+        }
+
+        // 3. Camera-style shutter button (manual capture; no automatic locking)
+        if (!isLocked && !isLoadingLookup) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Box(
+                modifier = Modifier
+                    .size(68.dp)
+                    .clip(CircleShape)
+                    .border(4.dp, Color.White, CircleShape)
+                    .padding(6.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.92f))
+                    .clickable { onShutterClick() }
+            )
         }
     }
 }
@@ -865,6 +881,7 @@ fun BottomPropertyInsightSheet(
                 }
             }
         }
+
     }
 }
 

@@ -273,30 +273,16 @@ class StabilizationAndLocationTracker(
             val elapsed = now - steadyStartTimestampMs
             val progress = (elapsed.toFloat() / stabilizationDurationMs.toFloat()).coerceIn(0f, 1f)
 
-            if (progress >= 1.0f && !isLockedOnTarget) {
-                isLockedOnTarget = true
-                lockedHeadingDeg = currentHeadingDeg
-                onStateUpdate(
-                    currentLat,
-                    currentLon,
-                    hasRealGpsFix && !isViewingPresetLocation,
-                    currentHeadingDeg,
-                    1.0f,
-                    true,
-                    true
-                )
-                onStabilizedLock(currentLat, currentLon, currentHeadingDeg)
-            } else {
-                onStateUpdate(
-                    currentLat,
-                    currentLon,
-                    hasRealGpsFix && !isViewingPresetLocation,
-                    currentHeadingDeg,
-                    progress,
-                    true,
-                    false
-                )
-            }
+            // Manual shutter mode: never auto-lock; only the shutter / Scan Now button locks on a house.
+            onStateUpdate(
+                currentLat,
+                currentLon,
+                hasRealGpsFix && !isViewingPresetLocation,
+                currentHeadingDeg,
+                progress,
+                true,
+                false
+            )
         }
     }
 
