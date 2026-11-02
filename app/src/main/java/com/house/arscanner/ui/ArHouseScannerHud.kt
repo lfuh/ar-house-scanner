@@ -77,6 +77,7 @@ fun TopTelemetryHudBar(
     lat: Double,
     lon: Double,
     hasRealGps: Boolean,
+    gpsAccuracyM: Float = -1f,
     headingDeg: Float,
     targetDistanceMeters: Int,
     isLocked: Boolean,
@@ -114,13 +115,27 @@ fun TopTelemetryHudBar(
                     modifier = Modifier
                         .size(8.dp)
                         .clip(CircleShape)
-                        .background(if (hasRealGps) EmeraldAccent else GoldAccent)
+                        .background(
+                            when {
+                                !hasRealGps -> GoldAccent
+                                gpsAccuracyM > 25f -> Color(0xFFFF5252)
+                                gpsAccuracyM > 12f -> GoldAccent
+                                else -> EmeraldAccent
+                            }
+                        )
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Column {
                     Text(
-                        text = if (hasRealGps) "LIVE GPS" else "PRESET / INDOOR",
-                        color = if (hasRealGps) EmeraldAccent else GoldAccent,
+                        text = if (hasRealGps) {
+                            if (gpsAccuracyM > 0f) "LIVE GPS ±${gpsAccuracyM.roundToInt()}m" else "LIVE GPS"
+                        } else "PRESET / INDOOR",
+                        color = when {
+                            !hasRealGps -> GoldAccent
+                            gpsAccuracyM > 25f -> Color(0xFFFF5252)
+                            gpsAccuracyM > 12f -> GoldAccent
+                            else -> EmeraldAccent
+                        },
                         fontSize = 9.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.4.sp,

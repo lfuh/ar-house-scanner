@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
     private var currentLat by mutableDoubleStateOf(37.4184)
     private var currentLon by mutableDoubleStateOf(-122.1162)
     private var hasRealGps by mutableStateOf(false)
+    private var gpsAccuracyM by mutableFloatStateOf(-1f)
     private var currentHeadingDeg by mutableFloatStateOf(45f)
     private var stabilityProgress by mutableFloatStateOf(0f)
     private var isSteady by mutableStateOf(true)
@@ -95,6 +96,7 @@ class MainActivity : ComponentActivity() {
                 currentLat = lat
                 currentLon = lon
                 hasRealGps = realGps
+                gpsAccuracyM = tracker.realGpsAccuracyM
                 currentHeadingDeg = heading
                 stabilityProgress = progress
                 isSteady = steady
@@ -162,6 +164,7 @@ class MainActivity : ComponentActivity() {
                                 lat = currentLat,
                                 lon = currentLon,
                                 hasRealGps = hasRealGps,
+                                gpsAccuracyM = gpsAccuracyM,
                                 headingDeg = currentHeadingDeg,
                                 targetDistanceMeters = targetDistanceMeters,
                                 isLocked = isLocked,
