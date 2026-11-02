@@ -101,9 +101,19 @@ object ZillowBackgroundScraper {
                 val root = JSONObject(body)
                 val results = root.optJSONArray("results")
                 if (results != null && results.length() > 0) {
+                    val wantedNumber = streetAddress.substringBefore(" ").trim()
+                    val wantedStreetWord = streetAddress.substringAfter(" ", "")
+                        .trim().substringBefore(" ").lowercase(Locale.US)
                     for (i in 0 until results.length()) {
                         val item = results.optJSONObject(i) ?: continue
                         val display = item.optString("display").ifBlank { rawFull }
+                        // Only accept the suggestion whose house number AND street match; otherwise
+                        // we would open / scrape a neighboring property (e.g. 3484 instead of 3488).
+                        val displayNumber = display.substringBefore(" ").trim()
+                        if (wantedNumber.isNotEmpty() && !displayNumber.equals(wantedNumber, ignoreCase = true)) continue
+                        if (wantedStreetWord.isNotEmpty() &&
+                            !display.lowercase(Locale.US).contains(wantedStreetWord)
+                        ) continue
                         val meta = item.optJSONObject("metaData") ?: continue
                         val zpid = meta.opt("zpid")?.toString()?.takeIf { it.isNotBlank() && it != "null" }
                         if (zpid != null) {

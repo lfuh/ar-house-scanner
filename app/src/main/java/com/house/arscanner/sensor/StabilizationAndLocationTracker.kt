@@ -6,6 +6,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.hardware.GeomagneticField
+import kotlin.math.abs
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -42,6 +44,11 @@ class StabilizationAndLocationTracker(
         private set
     var hasRealGpsFix: Boolean = false
         private set
+    var realGpsAccuracyM: Float = 50f
+        private set
+    private var lastFixTimeMs: Long = 0L
+    private var cachedDeclinationDeg: Float = 0f
+    private var declinationComputedAtMs: Long = 0L
 
     // Currently displayed coordinates (either realGps or temporary preset)
     var currentLat: Double = 37.4184
@@ -93,7 +100,7 @@ class StabilizationAndLocationTracker(
                 )
                 for (provider in providers) {
                     if (locationManager.isProviderEnabled(provider)) {
-                        locationManager.requestLocationUpdates(provider, 1500L, 1f, this)
+                        locationManager.requestLocationUpdates(provider, 1000L, 0f, this)
                     }
                 }
             } catch (_: SecurityException) {
@@ -114,15 +121,21 @@ class StabilizationAndLocationTracker(
             for (provider in providers) {
                 if (locationManager.isProviderEnabled(provider)) {
                     val loc = locationManager.getLastKnownLocation(provider) ?: continue
+                    // Skip stale cached fixes (> 2 min old); they can be hundreds of meters off
+                    if (System.currentTimeMillis() - loc.time > 120_000L && hasRealGpsFix) continue
                     if (bestLocation == null || loc.time > bestLocation.time) {
                         bestLocation = loc
                     }
                 }
             }
             if (bestLocation != null) {
-                realGpsLat = bestLocation.latitude
-                realGpsLon = bestLocation.longitude
-                hasRealGpsFix = true
+                if (!hasRealGpsFix || bestLocation.time > lastFixTimeMs) {
+                    realGpsLat = bestLocation.latitude
+                    realGpsLon = bestLocation.longitude
+                    if (bestLocation.hasAccuracy()) realGpsAccuracyM = bestLocation.accuracy
+                    lastFixTimeMs = bestLocation.time
+                    hasRealGpsFix = true
+                }
                 if (!isViewingPresetLocation) {
                     currentLat = realGpsLat
                     currentLon = realGpsLon
@@ -231,9 +244,17 @@ class StabilizationAndLocationTracker(
             val r = FloatArray(9)
             val i = FloatArray(9)
             if (SensorManager.getRotationMatrix(r, i, gravity, geomagnetic)) {
+                // When the phone is held upright (camera pointing at a house), the camera looks along
+                // the device -Z axis, so remap axes; otherwise heading is wildly off.
+                val upright = abs(gravity[2]) < 6.5f
+                val remapped = FloatArray(9)
+                val rm = if (upright &&
+                    SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_X, SensorManager.AXIS_Z, remapped)
+                ) remapped else r
                 val orientation = FloatArray(3)
-                SensorManager.getOrientation(r, orientation)
-                val azimuthDeg = ((Math.toDegrees(orientation[0].toDouble()).toFloat() + 360f) % 360f)
+                SensorManager.getOrientation(rm, orientation)
+                val magneticAzimuth = Math.toDegrees(orientation[0].toDouble()).toFloat()
+                val azimuthDeg = ((magneticAzimuth + magneticDeclinationDeg() + 720f) % 360f)
                 val delta = ((azimuthDeg - currentHeadingDeg + 540f) % 360f) - 180f
                 currentHeadingDeg = (currentHeadingDeg + 0.15f * delta + 360f) % 360f
             }
@@ -288,9 +309,32 @@ class StabilizationAndLocationTracker(
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
+    /** Magnetic declination at the current GPS position (converts magnetic north to true north). */
+    private fun magneticDeclinationDeg(): Float {
+        val now = System.currentTimeMillis()
+        if (now - declinationComputedAtMs > 60_000L) {
+            declinationComputedAtMs = now
+            cachedDeclinationDeg = try {
+                GeomagneticField(
+                    realGpsLat.toFloat(), realGpsLon.toFloat(), 0f, now
+                ).declination
+            } catch (_: Exception) {
+                cachedDeclinationDeg
+            }
+        }
+        return cachedDeclinationDeg
+    }
+
     override fun onLocationChanged(location: Location) {
+        // Ignore a coarse network fix if we have a recent, more accurate fix
+        val age = System.currentTimeMillis() - lastFixTimeMs
+        if (hasRealGpsFix && age < 10_000L && location.hasAccuracy() &&
+            location.accuracy > realGpsAccuracyM * 1.5f && location.accuracy > 25f
+        ) return
         realGpsLat = location.latitude
         realGpsLon = location.longitude
+        realGpsAccuracyM = if (location.hasAccuracy()) location.accuracy else 50f
+        lastFixTimeMs = System.currentTimeMillis()
         hasRealGpsFix = true
         if (!isViewingPresetLocation) {
             currentLat = realGpsLat
